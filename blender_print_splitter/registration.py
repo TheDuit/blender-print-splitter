@@ -4,24 +4,31 @@ import bpy
 
 
 def _registered_class(name):
-    # Search the actual registrable base classes. bpy.types attribute lookup
-    # can return an unregistered Python metaclass stub.
+    # Inspect actual Python subclasses so stale bpy.types metaclass stubs are
+    # never passed to unregister_class.
     for base in (bpy.types.Operator, bpy.types.Panel, bpy.types.PropertyGroup):
-        registered = base.bl_rna_get_subclass_py(name, None)
-        if registered is not None:
-            return registered
+        for candidate in base.__subclasses__():
+            if candidate.__name__ != name:
+                continue
+            try:
+                if candidate.bl_rna.identifier == name:
+                    return candidate
+            except Exception:
+                continue
     return None
 
 
 def unregister_class_by_name(name):
     registered = _registered_class(name)
-    if registered is not None:
-        try:
-            bpy.utils.unregister_class(registered)
-        except Exception:
-            # Reloads can leave Python metaclass references after Blender has
-            # already removed their RNA registration.
-            pass
+    if registered is None:
+        return True
+    try:
+        bpy.utils.unregister_class(registered)
+    except Exception:
+        # Reloads can leave Python metaclass references after Blender has
+        # already removed their RNA registration.
+        return _registered_class(name) is None
+    return _registered_class(name) is None
 
 
 def register_classes(classes):
@@ -29,20 +36,25 @@ def register_classes(classes):
     resolved_classes = []
     try:
         for cls in classes:
-            # Keep an existing Blender registration in place. It may belong to
-            # an earlier module instance that cannot safely be unregistered.
             existing = _registered_class(cls.__name__)
-            if existing is not None:
+            if existing is cls:
                 resolved_classes.append(existing)
                 continue
+            if existing is not None:
+                try:
+                    bpy.utils.unregister_class(existing)
+                except Exception:
+                    still_registered = _registered_class(cls.__name__)
+                    if still_registered is not None:
+                        resolved_classes.append(still_registered)
+                        continue
             try:
                 bpy.utils.register_class(cls)
-            except RuntimeError as exc:
-                if "already registered as a subclass" not in str(exc):
-                    raise
+            except Exception:
                 existing = _registered_class(cls.__name__)
-                if existing is not None:
-                    resolved_classes.append(existing)
+                if existing is None:
+                    raise
+                resolved_classes.append(existing)
                 continue
             registered_here.append(cls.__name__)
             resolved_classes.append(cls)

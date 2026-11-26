@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "blender_print_splitter"
-version = "0.3.5"
+version = "0.3.6"
 name = "Blender Print Splitter"
 tagline = "Analyze Face Sets and split parts for 3D printing"
 maintainer = "Blender Print Splitter contributors"

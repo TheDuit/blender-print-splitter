@@ -6,7 +6,7 @@ Build a Sculpt Mode add-on with two independent ways to mark a printable part: p
 
 The add-on is an independent project outside the Imobflow repository. **English is the default language for the UI, messages, and documentation.** The compatibility target is **Blender 5.3.0 and later**.
 
-## Implementation status — v0.3.5
+## Implementation status — v0.3.6
 
 - [x] Keep manual painting and geometry analysis as separate workflows.
 - [x] Use Blender's native **By Normals** and **Loose Parts** initializers for geometry analysis.

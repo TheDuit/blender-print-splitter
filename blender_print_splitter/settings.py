@@ -5,7 +5,7 @@ import json
 import bpy
 
 from .core import GEOMETRY_FACE_SET_SUMMARY_KEY, FACE_SET_KEY, TARGET_FACE_SET, is_mesh_object
-from .registration import register_classes, unregister_classes
+from .registration import register_classes, unregister_class_by_name
 
 
 _FACE_SET_ENUM_STRINGS = {}
@@ -168,6 +168,6 @@ def register():
 
 
 def unregister():
-    if hasattr(bpy.types.Scene, "print_splitter_settings"):
+    removed = unregister_class_by_name(PSS_Settings.__name__)
+    if removed and hasattr(bpy.types.Scene, "print_splitter_settings"):
         del bpy.types.Scene.print_splitter_settings
-    unregister_classes((PSS_Settings,))
