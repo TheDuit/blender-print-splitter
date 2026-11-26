@@ -158,8 +158,8 @@ class PSS_Settings(bpy.types.PropertyGroup):
 def register():
     if hasattr(bpy.types.Scene, "print_splitter_settings"):
         del bpy.types.Scene.print_splitter_settings
-    register_classes((PSS_Settings,))
-    bpy.types.Scene.print_splitter_settings = bpy.props.PointerProperty(type=PSS_Settings)
+    settings_type = register_classes((PSS_Settings,))[0]
+    bpy.types.Scene.print_splitter_settings = bpy.props.PointerProperty(type=settings_type)
 
 
 def unregister():
