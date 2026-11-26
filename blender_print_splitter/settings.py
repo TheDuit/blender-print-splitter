@@ -103,20 +103,40 @@ class PSS_Settings(bpy.types.PropertyGroup):
     )
     geometry_partition_method: bpy.props.EnumProperty(
         name="Analysis Method",
-        description="Choose whether to detect surface folds or disconnected mesh components",
+        description="Choose whether to detect surface features or disconnected mesh components",
         items=(
-            ("SURFACE_FOLDS", "Surface Folds", "Create connected regions from changes in face normals"),
+            (
+                "SURFACE_FOLDS",
+                "Surface Features",
+                "Create regions from geometric folds and merge tiny patches into their neighbors",
+            ),
             ("LOOSE_PARTS", "Disconnected Parts", "Create one region for each disconnected mesh component"),
         ),
         default="SURFACE_FOLDS",
     )
     geometry_angle_degrees: bpy.props.FloatProperty(
-        name="Fold Threshold (°)",
-        default=40.0,
+        name="Feature Angle (°)",
+        default=30.0,
         min=5.0,
         max=89.0,
         precision=1,
-        description="Normal-angle threshold used by Blender's native Surface Folds analysis",
+        description="Normal change measured across the curvature scale; lower values create more regions",
+    )
+    geometry_feature_scale_percent: bpy.props.FloatProperty(
+        name="Curvature Scale (% of Size)",
+        default=10.0,
+        min=0.25,
+        max=25.0,
+        precision=1,
+        description="Surface distance over which the feature angle is measured; higher values create more detail",
+    )
+    geometry_min_region_percent: bpy.props.FloatProperty(
+        name="Merge Regions Below (%)",
+        default=3.0,
+        min=0.0,
+        max=25.0,
+        precision=1,
+        description="Merge small surface patches into the adjacent region with the longest shared boundary",
     )
     geometry_target_face_set: bpy.props.EnumProperty(
         name="Region to Extract",
@@ -129,6 +149,11 @@ class PSS_Settings(bpy.types.PropertyGroup):
         name="Merge Into",
         description="Destination region for the selected Face Set",
         items=_geometry_face_set_items,
+        options={"SKIP_SAVE"},
+    )
+    show_advanced_options: bpy.props.BoolProperty(
+        name="Advanced Options",
+        default=False,
         options={"SKIP_SAVE"},
     )
     connector_diameter_mm: bpy.props.FloatProperty(

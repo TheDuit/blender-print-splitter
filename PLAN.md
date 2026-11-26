@@ -6,10 +6,13 @@ Build a Sculpt Mode add-on with two independent ways to mark a printable part: p
 
 The add-on is an independent project outside the Imobflow repository. **English is the default language for the UI, messages, and documentation.** The compatibility target is **Blender 5.3.0 and later**.
 
-## Implementation status — v0.3.8
+## Implementation status — v0.4.0
 
 - [x] Keep manual painting and geometry analysis as separate workflows.
-- [x] Use Blender's native **By Normals** and **Loose Parts** initializers for geometry analysis.
+- [x] Generate surface regions directly from mesh curvature and connected topology, then merge small patches into adjacent regions.
+- [x] Compensate for mesh density with a relative curvature scale; use compact mesh buffers instead of a full temporary BMesh.
+- [x] Keep the main panel focused on paint, smooth, analyze, and extract; collapse less common controls under **Options**.
+- [x] Use connected mesh components for the separate **Disconnected Parts** analysis.
 - [x] Provide region selection, merge-by-relabeling, list refresh, and native Draw Face Sets brush access.
 - [x] Clear generated Face Sets after each successful split so a resulting piece can be analyzed again.
 - [x] Recover from partial Blender registration by removing stale classes and handlers before re-registering.
@@ -23,7 +26,7 @@ The add-on is an independent project outside the Imobflow repository. **English 
 
 1. Select a mesh object and click **Start New Part**.
 2. On the first split, preserve the original object's name and archive it in a hidden, unselectable collection. Create exactly one independent working copy. If the selected mesh is already marked as a division, process it in place without copying it.
-3. Choose one marking workflow: paint one region with the Print Splitter brush, or use Blender's native Face Set initializer to analyze surface folds by face normals or split disconnected mesh components. The geometry workflow does not depend on material slots or marked seams/edges.
+3. Choose one marking workflow: paint one region with the Print Splitter brush, or analyze surface curvature / disconnected mesh components. The geometry workflow does not depend on material slots or marked seams/edges.
 4. In geometry mode, choose the region to extract, merge other Face Sets into it as needed, and use Blender's native **Draw Face Sets** brush for manual boundary edits. The Print Splitter brush and **Smooth Face Sets** remain part of the separate manual flow.
 5. Detect disconnected target regions. Ignore small components relative to the largest and optionally merge nearby target islands along the mesh surface.
 6. Convert the selected Face Set to a mask and use Blender's Mask Slice with a new object and hole filling, producing complementary parts with matching capped boundaries. Clear Face Sets on both results; run a fresh analysis before a later geometry-based split. Mark both parts as divisions.
@@ -41,7 +44,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - Reuse an already divided mesh directly, without making another copy.
 - Clear old Face Sets and masks before each new interaction.
 - Provide a custom Face Set paint tool that assigns one ID and color across strokes without Ctrl.
-- Offer a separate geometry-analysis workflow using Blender's native **By Normals** and **Loose Parts** Face Set initializers. Do not merge generated regions automatically; let the user merge them explicitly.
+- Offer a separate geometry-analysis workflow using mesh topology and face-normal changes to identify surface regions, plus disconnected mesh components. Merge tiny curvature patches into their strongest neighboring region; leave larger regions editable.
 - Let users choose the target region, merge one Face Set into another by relabeling faces, and activate Blender's native Draw Face Sets brush for manual cleanup in geometry mode.
 - Clear generated Face Sets after each split so repeated splits reanalyze only the selected resulting mesh.
 - Use left-drag to paint and right-drag to erase before applying the split; display brush and eraser cursors plus a circular radius preview. Allow scrolling to resize the brush while painting.
@@ -84,7 +87,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 
 1. Confirm one-time copying, original-name preservation, and hidden/unselectable archival.
 2. Confirm that every manual paint stroke uses one Face Set ID without Ctrl.
-3. Confirm that the native **By Normals** initializer assigns connected Face Sets from fold thresholds and **Loose Parts** separates disconnected components.
+3. Confirm that the geometry analyzer creates connected curvature regions across multiple mesh densities and that disconnected-part mode separates loose components.
 4. Confirm Face Set merge relabels faces without changing mesh geometry and that the native Draw Face Sets brush edits generated labels.
 5. Confirm generated Face Sets are cleared after a split and a later split analyzes the current mesh again.
 6. Test Face Set-to-mask conversion and `paint_mask_slice(new_object=True, fill_holes=True)`; inspect matching cap topology and mask thresholds.
@@ -104,7 +107,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 3. Implement **Start New Part**: archive and copy an original once; reuse a marked division directly.
 4. Register the custom paint tool and assign every stroke to the same Face Set.
 5. Add component cleanup and a label-only **Smooth Face Sets** action.
-6. Add native **Surface Folds** and **Disconnected Parts** analysis, plus target selection, Face Set merging, list refresh, and native Draw Face Sets brush activation.
+6. Add **Surface Features** and **Disconnected Parts** analysis, plus target selection, Face Set merging, list refresh, and native Draw Face Sets brush activation.
 7. Keep generated segmentation temporary and clear it after each split; reanalyze the selected piece on a later geometry-based interaction.
 8. Convert the selected Face Set to a mask and use Mask Slice to create both complementary parts with filled interfaces.
 9. Mark both resulting objects as divisions using internal properties.
@@ -143,7 +146,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - Internal metadata identifies divisions even after users rename the objects; the name prefix is only a visual hint.
 - Each interaction turns its input mesh into the remainder and creates exactly one extracted part.
 - Manual mode clears Face Sets and paints one target set per interaction.
-- Geometry mode partitions the selected mesh with Blender's native face-normal flood fill or disconnected-component initializer, without using marked seams, sharp edges, or material data.
+- Geometry mode partitions the selected mesh from geometric curvature or disconnected components, without using marked seams, sharp edges, or material data.
 - Geometry mode exposes the generated regions for target selection, merge-by-relabeling, and native Draw Face Sets brush cleanup.
 - Face Sets are temporary: every successful split clears both results, and the next geometry-based split analyzes its selected input again.
 - Every brush stroke uses the same Face Set ID and color without pressing Ctrl.
@@ -173,7 +176,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - Mask Slice's hole filling triangulates the split boundary. Inspect cap quality and matching between both halves on complex, concave, and non-manifold meshes.
 - Mask Slice uses temporary mesh copies while splitting; measure peak memory on dense models even though repeated splits do not leave extra full-mesh clones in the scene.
 - Island filtering and gap filling can merge regions that the user intended to keep separate; use conservative thresholds and a reviewable preview.
-- Geometry segmentation depends on polygon density and, for Surface Folds, the normal-angle threshold; smooth meshes without clear folds can produce one broad region or many small regions. Users can adjust the threshold, merge regions, and refine boundaries with the native brush.
+- Geometry segmentation depends on mesh shape and curvature settings; smooth meshes without clear folds can produce one broad region or several patches. Users can adjust the angle and scale, merge regions, and refine boundaries with the native brush. The analyzer does not semantically identify named features.
 - The Manifold solver fails on non-manifold input meshes; any failed solver must report the error and preserve the pre-confirmation parts.
 - Connectors may not fit on highly curved, narrow, or small surfaces; detect and explain such cases.
 - The workflow must distinguish the archived original, working remainder, and extracted parts across repeated splits.
@@ -185,7 +188,6 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - [Blender 5.3 Python API — BVHTree](https://docs.blender.org/api/5.3/mathutils.bvhtree.html): supported constructors include `FromObject` and `FromPolygons`; `FromMesh` is not part of the API. The brush uses `FromObject` after hiding viewport modifiers, avoiding large temporary Python copies of the mesh data.
 - [Blender 5.3 Python API — Sculpt operators](https://docs.blender.org/api/5.3/bpy.ops.sculpt.html)
 - [Blender 5.3 Manual — Face Sets](https://docs.blender.org/manual/en/5.3/sculpt_paint/sculpting/editing/face_sets.html)
-- [Blender source — native Face Set initialization](https://projects.blender.org/blender/blender/src/branch/main/source/blender/editors/sculpt_paint/mesh/sculpt_face_set.cc): the add-on calls the built-in normal-based and loose-parts initializers rather than constructing face adjacency in Python.
 - [Blender 5.3 Manual — Draw Face Sets](https://docs.blender.org/manual/en/5.3/sculpt_paint/sculpting/brushes/draw_facesets.html)
 - [Blender 5.3 Manual — Mesh Filter, including Relax Face Sets](https://docs.blender.org/manual/en/5.3/sculpt_paint/sculpting/tools/mesh_filter.html)
 - [Blender source — Mesh Filter implementation](https://projects.blender.org/blender/blender/src/branch/main/source/blender/editors/sculpt_paint/mesh/sculpt_filter_mesh.cc): `RELAX_FACE_SETS` calculates vertex translations; this add-on uses label-only smoothing to keep the surface fixed.

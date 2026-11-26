@@ -40,8 +40,7 @@ class PSS_PT_panel(bpy.types.Panel):
             return
 
         box = layout.box()
-        box.label(text=f"Object: {obj.name}", icon="MESH_DATA")
-        box.label(text=f"Status: {'Division' if is_division else role}")
+        box.label(text=f"{obj.name} · {'Division' if is_division else role}", icon="MESH_DATA")
 
         if context.mode != "SCULPT" or role not in {ROLE_WORKING, ROLE_DIVISION}:
             layout.operator("print_splitter.start_operation", icon="DUPLICATE")
@@ -55,65 +54,77 @@ class PSS_PT_panel(bpy.types.Panel):
             self._draw_geometry_segmentation(layout, settings, obj)
             return
 
-        layout.label(text="1. Paint the region. Every stroke uses the same Face Set.", icon="BRUSH_DATA")
-        row = layout.row(align=True)
-        row.operator("print_splitter.paint_faceset", text="Paint Face Set", icon="BRUSH_DATA")
-        row.prop(settings, "brush_radius_px", text="Radius")
-        layout.label(text="Left-drag paint; right-drag erase; scroll changes brush radius.", icon="INFO")
-
-        row = layout.row(align=True)
-        smooth = row.operator("print_splitter.smooth_faceset", text="Smooth Face Sets", icon="MOD_SMOOTH")
+        manual = layout.box()
+        manual.label(text="Paint one region", icon="BRUSH_DATA")
+        row = manual.row(align=True)
+        row.operator("print_splitter.paint_faceset", text="Paint Region", icon="BRUSH_DATA")
+        smooth = row.operator("print_splitter.smooth_faceset", text="Smooth Boundary", icon="MOD_SMOOTH")
         smooth.iterations = settings.face_set_smooth_iterations
-        row.prop(settings, "face_set_smooth_iterations", text="Iterations")
-        layout.label(text="Only Face Set labels change; mesh vertices stay fixed.", icon="INFO")
+        manual.label(text="Left-drag paints · right-drag erases · wheel changes brush size", icon="INFO")
+        manual.operator("print_splitter.extract_part", text="Extract Part", icon="MOD_BOOLEAN")
 
-        layout.separator()
-        layout.label(text="2. Cleanup and extraction")
-        col = layout.column(align=True)
-        col.prop(settings, "small_island_percent")
-        col.prop(settings, "merge_gap_mm")
-        col.prop(settings, "mask_threshold")
-        layout.operator("print_splitter.extract_part", text="Extract Part", icon="MOD_BOOLEAN")
-
-        box = layout.box()
-        box.label(text="Alternative: Analyze the Mesh", icon="MOD_DECIM")
-        box.prop(settings, "geometry_partition_method")
-        if settings.geometry_partition_method == "SURFACE_FOLDS":
-            box.prop(settings, "geometry_angle_degrees")
+        analysis = layout.box()
+        analysis.label(text="Or analyze the surface", icon="MOD_DECIM")
+        analysis.prop(settings, "geometry_partition_method", text="Method")
         if getattr(obj, "use_dynamic_topology_sculpting", False):
-            box.label(text="Disable Dyntopo before analyzing Face Sets.", icon="ERROR")
-        box.operator("print_splitter.analyze_geometry", text="Generate Geometry Face Sets", icon="OUTLINER_OB_MESH")
+            analysis.label(text="Disable Dyntopo before analyzing regions.", icon="ERROR")
+        analysis.operator("print_splitter.analyze_geometry", text="Analyze Mesh", icon="VIEWZOOM")
+        self._draw_advanced_toggle(layout, settings)
+        if settings.show_advanced_options:
+            self._draw_advanced_options(layout, settings, obj, include_geometry=True)
 
     @staticmethod
     def _draw_geometry_segmentation(layout, settings, obj):
         box = layout.box()
-        box.label(text="Geometry Face Sets", icon="MOD_DECIM")
-        box.label(text="Temporary regions generated from mesh geometry.", icon="INFO")
-        box.prop(settings, "geometry_partition_method")
-        if settings.geometry_partition_method == "SURFACE_FOLDS":
-            box.prop(settings, "geometry_angle_degrees")
-        if getattr(obj, "use_dynamic_topology_sculpting", False):
-            box.label(text="Disable Dyntopo before editing generated Face Sets.", icon="ERROR")
-        box.operator("print_splitter.analyze_geometry", text="Reanalyze Geometry", icon="FILE_REFRESH")
-
-        box.separator()
-        box.prop(settings, "geometry_target_face_set", text="Region to Extract")
-        box.prop(settings, "geometry_merge_into_face_set", text="Merge Into")
-        box.operator("print_splitter.merge_geometry_facesets", text="Merge Regions", icon="AUTOMERGE_ON")
-        row = box.row(align=True)
-        row.operator("print_splitter.native_faceset_brush", text="Native Face Set Brush", icon="BRUSH_DATA")
-        row.operator("print_splitter.refresh_geometry_regions", text="Refresh List", icon="FILE_REFRESH")
-        box.label(text="Refresh the list after the native brush creates new regions.", icon="INFO")
-
-        box.separator()
-        box.label(text="Split the selected region")
-        col = box.column(align=True)
-        col.prop(settings, "small_island_percent")
-        col.prop(settings, "merge_gap_mm")
-        col.prop(settings, "mask_threshold")
+        box.label(text="Choose a region to extract", icon="MOD_DECIM")
+        box.prop(settings, "geometry_target_face_set", text="Region")
         box.operator("print_splitter.extract_part", text="Extract Selected Region", icon="MOD_BOOLEAN")
+
+        row = layout.row(align=True)
+        row.prop(settings, "geometry_partition_method", text="")
+        row.operator("print_splitter.analyze_geometry", text="Reanalyze", icon="FILE_REFRESH")
+        if getattr(obj, "use_dynamic_topology_sculpting", False):
+            layout.label(text="Disable Dyntopo before editing generated regions.", icon="ERROR")
+        layout.label(text="Refine regions with Blender's Face Set brush, or merge them in Options.", icon="INFO")
+        PSS_PT_panel._draw_advanced_toggle(layout, settings)
+        if settings.show_advanced_options:
+            PSS_PT_panel._draw_advanced_options(layout, settings, obj, include_geometry=True)
+
+    @staticmethod
+    def _draw_advanced_toggle(layout, settings):
+        row = layout.row()
+        row.prop(
+            settings,
+            "show_advanced_options",
+            text="Options",
+            icon="PREFERENCES",
+            toggle=True,
+        )
+
+    @staticmethod
+    def _draw_advanced_options(layout, settings, obj, include_geometry=False):
+        box = layout.box()
+        box.label(text="Advanced Options", icon="PREFERENCES")
+        box.prop(settings, "brush_radius_px")
+        box.prop(settings, "face_set_smooth_iterations")
         box.separator()
-        box.operator("print_splitter.manual_faceset_mode", text="Switch to Manual Paint", icon="BRUSH_DATA")
+        box.prop(settings, "small_island_percent")
+        box.prop(settings, "merge_gap_mm")
+        box.prop(settings, "mask_threshold")
+        if include_geometry:
+            box.separator()
+            if settings.geometry_partition_method == "SURFACE_FOLDS":
+                box.prop(settings, "geometry_angle_degrees")
+                box.prop(settings, "geometry_feature_scale_percent")
+                box.prop(settings, "geometry_min_region_percent")
+            if obj.get(GEOMETRY_SEGMENTATION_KEY):
+                box.label(text="Merge selected region into:")
+                box.prop(settings, "geometry_merge_into_face_set", text="")
+                box.operator("print_splitter.merge_geometry_facesets", text="Merge Regions", icon="AUTOMERGE_ON")
+                row = box.row(align=True)
+                row.operator("print_splitter.native_faceset_brush", text="Face Set Brush", icon="BRUSH_DATA")
+                row.operator("print_splitter.refresh_geometry_regions", text="Refresh", icon="FILE_REFRESH")
+                box.operator("print_splitter.manual_faceset_mode", text="Switch to Manual Paint", icon="BRUSH_DATA")
 
     @staticmethod
     def _draw_connector_controls(layout, settings, obj, pair_id=None):
