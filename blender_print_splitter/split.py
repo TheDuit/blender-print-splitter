@@ -346,7 +346,7 @@ def _select_active(context, obj):
 class PSS_OT_extract_part(bpy.types.Operator):
     bl_idname = "print_splitter.extract_part"
     bl_label = "Extract Part"
-    bl_description = "Split the painted region into matching capped mesh parts and add a connector"
+    bl_description = "Split the selected region into two matching capped mesh parts"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -387,8 +387,9 @@ class PSS_OT_extract_part(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
-        seam_frame = _seam_frame(source, target_id)
-        if geometry_mother_mode and seam_frame is None:
+        create_connector = settings.create_connector_after_split
+        seam_frame = _seam_frame(source, target_id) if create_connector else None
+        if create_connector and geometry_mother_mode and seam_frame is None:
             self.report({"ERROR"}, "No shared boundary was found. Refine the Face Set boundary before extracting this part.")
             return {"CANCELLED"}
         source_matrix = source.matrix_world.copy()
@@ -455,7 +456,7 @@ class PSS_OT_extract_part(bpy.types.Operator):
 
         has_remainder = source.name in bpy.data.objects and len(source.data.polygons) > 0
         if has_remainder:
-            if seam_frame:
+            if create_connector and seam_frame:
                 from .connectors import create_connector_pair
 
                 try:
@@ -482,7 +483,7 @@ class PSS_OT_extract_part(bpy.types.Operator):
                     add_pair_id(part, pair_id)
                 except (RuntimeError, ValueError) as exc:
                     self.report({"WARNING"}, f"The split is complete, but the connector could not be created: {exc}")
-            else:
+            elif create_connector:
                 self.report({"WARNING"}, "The split is complete, but no shared boundary was found for a connector.")
         else:
             part.pop(PAIR_ID_KEY, None)
@@ -501,8 +502,10 @@ class PSS_OT_extract_part(bpy.types.Operator):
 
         if removed:
             self.report({"INFO"}, f"Ignored {removed} faces in small islands.")
-        if has_remainder and seam_frame:
+        if has_remainder and create_connector and seam_frame:
             self.report({"INFO"}, "The part was split and a connector pair was placed at the interface.")
+        elif has_remainder and not create_connector:
+            self.report({"INFO"}, "The part was split without creating a connector.")
         return {"FINISHED"}
 
 

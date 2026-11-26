@@ -66,6 +66,13 @@ class PSS_PT_panel(bpy.types.Panel):
                 self._draw_connector_controls(layout, settings, obj)
             return
 
+        layout.prop(
+            settings,
+            "create_connector_after_split",
+            text="Create connector after split",
+            icon="MOD_BOOLEAN",
+        )
+
         if obj.get(GEOMETRY_SEGMENTATION_KEY):
             self._draw_geometry_segmentation(layout, settings, obj)
             return
@@ -164,10 +171,22 @@ class PSS_PT_panel(bpy.types.Panel):
         embed_label = "Pin Embed Depth (mm)"
         if pin_target and pin_target.get(MOTHER_PART_ID_KEY) == pin_target.get(PART_ID_KEY):
             embed_label = "Embed in Mother (mm)"
-        box.prop(settings, "connector_diameter_mm", text="Diameter (mm)")
+        box.prop(settings, "connector_shape", text="Shape")
+        box.prop(
+            settings,
+            "connector_diameter_mm",
+            text="Key Width (mm)" if settings.connector_shape == "TAPERED_KEY" else "Diameter (mm)",
+        )
         box.prop(settings, "connector_depth_mm", text="Reach / Socket (mm)")
         box.prop(settings, "connector_embed_depth_mm", text=embed_label)
         box.prop(settings, "connector_clearance_mm", text="Fit Clearance (mm)")
+        box.prop(settings, "connector_magnet_enabled", text="Add Magnet Pockets")
+        if settings.connector_magnet_enabled:
+            magnet_box = box.column(align=True)
+            magnet_box.prop(settings, "connector_magnet_diameter_mm")
+            magnet_box.prop(settings, "connector_magnet_depth_mm")
+            magnet_box.prop(settings, "connector_magnet_clearance_mm")
+            magnet_box.label(text="One matching pocket in each half, beside the pin.", icon="INFO")
         helpers = helpers_for_pair(pair_id)
         control = helpers.get("CONTROL")
         if control is not None:

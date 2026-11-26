@@ -28,6 +28,7 @@ HELPER_PAIR_KEY = "print_splitter_helper_pair_id"
 KIND_CONTROL = "CONTROL"
 KIND_PIN = "PIN"
 KIND_CUTTER = "CUTTER"
+KIND_MAGNET_CUTTER = "MAGNET_CUTTER"
 BOOLEAN_PREFIX = "PS Connector"
 BOOLEAN_OVERLAP_MM = 0.25
 CONFIRMED_PAIRS_KEY = "print_splitter_confirmed_connector_pairs"
@@ -54,6 +55,42 @@ def _cylinder_mesh(name, radius, length, start, segments=32):
     return mesh
 
 
+def _tapered_key_mesh(name, width, length, start, tip_scale=0.75):
+    """Build a square pin whose leading end is narrower than its base."""
+    mesh = bpy.data.meshes.new(name)
+    base_half = max(width * 0.5, 1e-6)
+    tip_half = max(base_half * tip_scale, 1e-6)
+    bottom = start
+    top = start + length
+    vertices = [
+        (-base_half, -base_half, bottom),
+        (base_half, -base_half, bottom),
+        (base_half, base_half, bottom),
+        (-base_half, base_half, bottom),
+        (-tip_half, -tip_half, top),
+        (tip_half, -tip_half, top),
+        (tip_half, tip_half, top),
+        (-tip_half, tip_half, top),
+    ]
+    faces = [
+        (3, 2, 1, 0),
+        (4, 5, 6, 7),
+        (0, 1, 5, 4),
+        (1, 2, 6, 5),
+        (2, 3, 7, 6),
+        (3, 0, 4, 7),
+    ]
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    return mesh
+
+
+def _connector_mesh(name, width, length, start, shape):
+    if shape == "TAPERED_KEY":
+        return _tapered_key_mesh(name, width, length, start)
+    return _cylinder_mesh(name, width * 0.5, length, start=start)
+
+
 def _dimensions(scene):
     settings = scene.print_splitter_settings
     diameter = mm_to_bu(settings.connector_diameter_mm, scene)
@@ -72,22 +109,39 @@ def _dimensions(scene):
 
 def _regenerate_helper(obj, scene):
     radius, depth, embed_depth, radial_clearance, overlap = _dimensions(scene)
+    settings = scene.print_splitter_settings
     kind = obj.get(KIND_KEY)
-    if kind == KIND_CUTTER:
-        radius += radial_clearance
-        start = -overlap
-        length = depth + (overlap * 2.0)
-    elif kind == KIND_PIN:
-        start = -embed_depth
-        length = embed_depth + depth + overlap
-    elif kind != KIND_PIN:
+    if kind == KIND_MAGNET_CUTTER:
+        magnet_clearance = mm_to_bu(settings.connector_magnet_clearance_mm, scene)
+        magnet_radius = mm_to_bu(settings.connector_magnet_diameter_mm * 0.5, scene) + magnet_clearance
+        magnet_depth = mm_to_bu(settings.connector_magnet_depth_mm, scene)
+        start = -magnet_depth - overlap
+        length = magnet_depth * 2.0 + overlap * 2.0
+        pin_width = radius * 2.0
+        obj.location = (
+            pin_width * 0.5 + magnet_radius + mm_to_bu(0.5, scene),
+            0.0,
+            0.0,
+        )
+        mesh = _cylinder_mesh(obj.name + "_Mesh", magnet_radius, length, start=start)
+    elif kind in {KIND_CUTTER, KIND_PIN}:
+        width = radius * 2.0
+        if kind == KIND_CUTTER:
+            width += radial_clearance * 2.0
+            start = -overlap
+            length = depth + (overlap * 2.0)
+        else:
+            start = -embed_depth
+            length = embed_depth + depth + overlap
+        mesh = _connector_mesh(
+            obj.name + "_Mesh",
+            width,
+            length,
+            start,
+            settings.connector_shape,
+        )
+    else:
         return
-    mesh = _cylinder_mesh(
-        obj.name + "_Mesh",
-        radius,
-        length,
-        start=start,
-    )
     old_mesh = obj.data
     obj.data = mesh
     if old_mesh and old_mesh.users == 0:
@@ -99,13 +153,38 @@ def update_helpers(context):
     scene = context.scene if context else bpy.context.scene
     if not scene or not hasattr(scene, "print_splitter_settings"):
         return
-    for obj in bpy.data.objects:
-        if obj.get(KIND_KEY) in {KIND_PIN, KIND_CUTTER}:
-            _regenerate_helper(obj, scene)
+    settings = scene.print_splitter_settings
+    pair_ids = {
+        obj.get(HELPER_PAIR_KEY, "")
+        for obj in bpy.data.objects
+        if obj.get(KIND_KEY) in {KIND_PIN, KIND_CUTTER, KIND_MAGNET_CUTTER}
+    }
+    for pair_id in pair_ids:
+        if not pair_id:
+            continue
+        helpers = helpers_for_pair(pair_id)
+        control = helpers[KIND_CONTROL]
+        if control is None:
+            continue
+        magnet_cutter = helpers[KIND_MAGNET_CUTTER]
+        if settings.connector_magnet_enabled and magnet_cutter is None:
+            magnet_cutter = _make_helper(
+                context,
+                f"PS_MagnetSeat_{pair_id[:6]}",
+                KIND_MAGNET_CUTTER,
+                pair_id,
+                control,
+            )
+        elif not settings.connector_magnet_enabled and magnet_cutter is not None:
+            _remove_helpers({KIND_MAGNET_CUTTER: magnet_cutter})
+            magnet_cutter = None
+        for helper in (helpers[KIND_PIN], helpers[KIND_CUTTER], magnet_cutter):
+            if helper is not None:
+                _regenerate_helper(helper, scene)
 
 
 def helpers_for_pair(pair_id):
-    helpers = {KIND_CONTROL: None, KIND_PIN: None, KIND_CUTTER: None}
+    helpers = {KIND_CONTROL: None, KIND_PIN: None, KIND_CUTTER: None, KIND_MAGNET_CUTTER: None}
     if not pair_id:
         return helpers
     for obj in bpy.data.objects:
@@ -168,7 +247,7 @@ def _disable_legacy_connector_previews(_unused=None):
             if modifier.type == "BOOLEAN" and modifier.name.startswith(BOOLEAN_PREFIX):
                 modifier.show_viewport = False
                 modifier.show_render = False
-        if scene and obj.get(KIND_KEY) in {KIND_PIN, KIND_CUTTER}:
+        if scene and obj.get(KIND_KEY) in {KIND_PIN, KIND_CUTTER, KIND_MAGNET_CUTTER}:
             _regenerate_helper(obj, scene)
     return None
 
@@ -192,15 +271,7 @@ def _make_controller(context, pair_id, location, axis):
 
 
 def _make_helper(context, name, kind, pair_id, controller):
-    radius, depth, _embed_depth, radial_clearance, _overlap = _dimensions(context.scene)
-    if kind == KIND_CUTTER:
-        radius += radial_clearance
-    mesh = _cylinder_mesh(
-        name + "_Mesh",
-        radius,
-        depth,
-        start=0.0,
-    )
+    mesh = bpy.data.meshes.new(name + "_Mesh")
     obj = bpy.data.objects.new(name, mesh)
     obj[KIND_KEY] = kind
     obj[HELPER_PAIR_KEY] = pair_id
@@ -230,7 +301,11 @@ def create_connector_pair(context, pin_target, socket_target, pair_id, seam_loca
     if not is_mesh_object(pin_target) or not is_mesh_object(socket_target):
         raise ValueError("A mesh is required on both sides of the split.")
     existing = helpers_for_pair(pair_id)
-    if all(existing.values()):
+    settings = context.scene.print_splitter_settings
+    complete = all(existing[kind] for kind in (KIND_CONTROL, KIND_PIN, KIND_CUTTER))
+    if settings.connector_magnet_enabled:
+        complete = complete and existing[KIND_MAGNET_CUTTER] is not None
+    if complete:
         return existing
     _remove_helpers(existing)
 
@@ -243,10 +318,24 @@ def create_connector_pair(context, pin_target, socket_target, pair_id, seam_loca
     try:
         pin = _make_helper(context, f"PS_Pin_{pair_id[:6]}", KIND_PIN, pair_id, control)
         socket = _make_helper(context, f"PS_Socket_{pair_id[:6]}", KIND_CUTTER, pair_id, control)
+        magnet = None
+        if settings.connector_magnet_enabled:
+            magnet = _make_helper(
+                context,
+                f"PS_MagnetSeat_{pair_id[:6]}",
+                KIND_MAGNET_CUTTER,
+                pair_id,
+                control,
+            )
     except Exception:
         _remove_helpers(helpers_for_pair(pair_id))
         raise
-    return {KIND_CONTROL: control, KIND_PIN: pin, KIND_CUTTER: socket}
+    return {
+        KIND_CONTROL: control,
+        KIND_PIN: pin,
+        KIND_CUTTER: socket,
+        KIND_MAGNET_CUTTER: magnet,
+    }
 
 
 def _find_pair(obj):
@@ -292,7 +381,7 @@ def _remember_confirmed_pair(obj, pair_id):
 
 
 def _remove_helpers(helpers):
-    for kind in (KIND_PIN, KIND_CUTTER, KIND_CONTROL):
+    for kind in (KIND_PIN, KIND_CUTTER, KIND_MAGNET_CUTTER, KIND_CONTROL):
         obj = helpers.get(kind)
         if obj is None or obj.name not in bpy.data.objects:
             continue
@@ -378,6 +467,10 @@ def _confirm_connector(context, pair_id, solver):
     try:
         _apply_boolean(context, pin_target, pin, "UNION", "Pin Union", solver, pending)
         _apply_boolean(context, socket_target, socket, "DIFFERENCE", "Socket Cut", solver, pending)
+        magnet_cutter = helpers.get(KIND_MAGNET_CUTTER)
+        if magnet_cutter is not None:
+            _apply_boolean(context, pin_target, magnet_cutter, "DIFFERENCE", "Male Magnet Pocket", solver, pending)
+            _apply_boolean(context, socket_target, magnet_cutter, "DIFFERENCE", "Female Magnet Pocket", solver, pending)
     except (RuntimeError, ValueError, TypeError) as exc:
         for target, backup in backups:
             current_mesh_name = target.data.name
@@ -465,17 +558,22 @@ class PSS_OT_confirm_connector(bpy.types.Operator):
         layout = self.layout
         layout.label(text="Boolean Solver")
         layout.prop(self, "solver", text="", expand=True)
-        layout.label(text="This applies the pin union and socket cut to both parts.", icon="INFO")
+        pair_id = self.pair_id or getattr(context.active_object, "get", lambda *_: "")(PAIR_ID_KEY, "")
+        magnet_enabled = helpers_for_pair(pair_id)[KIND_MAGNET_CUTTER] is not None
+        message = "This applies the connector and matching magnet pockets to both parts." if magnet_enabled else "This applies the connector to both parts."
+        layout.label(text=message, icon="INFO")
 
     def execute(self, context):
         obj = context.active_object
         pair_id = self.pair_id or obj.get(PAIR_ID_KEY, "") or obj.get(HELPER_PAIR_KEY, "")
+        magnet_enabled = helpers_for_pair(pair_id)[KIND_MAGNET_CUTTER] is not None
         try:
             _confirm_connector(context, pair_id, self.solver)
         except (RuntimeError, ValueError) as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Male pin and female socket applied with the {self.solver.title()} solver.")
+        applied = "Connector and magnet pockets" if magnet_enabled else "Connector"
+        self.report({"INFO"}, f"{applied} applied with the {self.solver.title()} solver.")
         return {"FINISHED"}
 
 

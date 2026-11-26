@@ -178,12 +178,60 @@ class PSS_Settings(bpy.types.PropertyGroup):
         default=False,
         options={"SKIP_SAVE"},
     )
+    create_connector_after_split: bpy.props.BoolProperty(
+        name="Create Connector After Split",
+        description="Create an editable connector preview after the split; when off, no connector confirmation is required",
+        default=True,
+    )
+    connector_shape: bpy.props.EnumProperty(
+        name="Connector Shape",
+        description="Choose a round pin or a square tapered key",
+        items=(
+            ("CYLINDER", "Cylinder", "Round connector pin and socket"),
+            ("TAPERED_KEY", "Tapered Square Key", "Square key with a narrower end for easier assembly"),
+        ),
+        default="CYLINDER",
+        update=_refresh_connectors,
+    )
     connector_diameter_mm: bpy.props.FloatProperty(
-        name="Connector Diameter (mm)",
+        name="Connector Width (mm)",
+        description="Cylinder diameter or square key width",
         default=4.0,
         min=0.5,
         max=50.0,
         precision=2,
+        update=_refresh_connectors,
+    )
+    connector_magnet_enabled: bpy.props.BoolProperty(
+        name="Add Magnet Pockets",
+        description="Cut a matching magnet pocket into each half, beside the connector",
+        default=False,
+        update=_refresh_connectors,
+    )
+    connector_magnet_diameter_mm: bpy.props.FloatProperty(
+        name="Magnet Diameter (mm)",
+        default=6.0,
+        min=1.0,
+        max=30.0,
+        precision=2,
+        update=_refresh_connectors,
+    )
+    connector_magnet_depth_mm: bpy.props.FloatProperty(
+        name="Magnet Depth (mm)",
+        description="Pocket depth inside each half, measured from the split surface",
+        default=2.0,
+        min=0.5,
+        max=10.0,
+        precision=2,
+        update=_refresh_connectors,
+    )
+    connector_magnet_clearance_mm: bpy.props.FloatProperty(
+        name="Magnet Fit Clearance (mm)",
+        default=0.2,
+        min=0.0,
+        max=1.0,
+        precision=2,
+        description="Radial clearance around each magnet",
         update=_refresh_connectors,
     )
     connector_depth_mm: bpy.props.FloatProperty(
