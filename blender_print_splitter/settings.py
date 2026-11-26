@@ -153,7 +153,7 @@ class PSS_Settings(bpy.types.PropertyGroup):
     )
     geometry_min_region_percent: bpy.props.FloatProperty(
         name="Merge Regions Below (%)",
-        default=3.0,
+        default=5.0,
         min=0.0,
         max=25.0,
         precision=1,
@@ -171,12 +171,6 @@ class PSS_Settings(bpy.types.PropertyGroup):
         description="Keep this central region on the remainder and add male pins to it",
         items=_geometry_face_set_items,
         update=_set_geometry_mother,
-        options={"SKIP_SAVE"},
-    )
-    geometry_merge_into_face_set: bpy.props.EnumProperty(
-        name="Merge Into",
-        description="Destination region for the selected Face Set",
-        items=_geometry_face_set_items,
         options={"SKIP_SAVE"},
     )
     show_advanced_options: bpy.props.BoolProperty(

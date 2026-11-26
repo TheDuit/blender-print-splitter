@@ -4,11 +4,11 @@ An independent Blender add-on for splitting printable parts from a sculpted mesh
 
 ## Compatibility and status
 
-Prototype version **0.5.0**, targeting **Blender 5.3.0 and later**. The end-to-end geometry split and Manifold connector flow has been checked on Suzanne in Blender 5.3.0. Complex user meshes still need inspection because Mask Slice output depends on the source topology.
+Prototype version **0.6.0**, targeting **Blender 5.3.0 and later**. Geometry analysis and splitting were reviewed on Suzanne in Blender 5.3.0; the on-mesh merge tool was exercised live with click-and-confirm, drag, clear, and cancel. The Manifold connector was confirmed on an adjoining-cube fixture. Sixty analysis parameter combinations were compared: 30 each on low-poly and subdivided Suzanne meshes. Complex user meshes still need inspection because Mask Slice output depends on the source topology.
 
 ## Installation
 
-1. Run `python3 package.py` from this directory to build `blender_print_splitter-0.5.0.zip`.
+1. Run `python3 package.py` from this directory to build `blender_print_splitter-0.6.0.zip`.
 2. In Blender, open **Edit > Preferences > Get Extensions > Install from Disk** and select the ZIP.
 3. Enable **Blender Print Splitter**, then open the **Print Splitter** tab in the 3D Viewport sidebar (`N`).
 
@@ -27,12 +27,13 @@ You can also install the `blender_print_splitter` directory as a local add-on.
 ## Alternative workflow: analyze the mesh
 
 1. Choose **Surface Features** or **Disconnected Parts**, then click **Analyze Mesh**.
-2. **Surface Features** finds connected regions from changes in the mesh's surface curvature. Tiny patches are merged into the neighboring region with the widest shared boundary. It does not depend on marked sharp edges, seams, or material slots. **Disconnected Parts** creates one Face Set per connected mesh component.
+2. **Surface Features** finds connected regions from changes in the mesh's surface curvature. Patches below 5% of total surface area are merged into the neighboring region with the widest shared boundary by default. It does not depend on marked sharp edges, seams, or material slots. **Disconnected Parts** creates one Face Set per connected mesh component.
 3. The analyzer preselects the region whose area-weighted center is nearest the mesh bounding-box center as **Mother (Male Pins)**. Change that dropdown if another region should be the base, then choose **Part (Female Socket)** to extract. The mother stays on the remainder; the extracted part gets the matching socket.
-4. Apply and confirm that connector before splitting the next region. The add-on blocks another split while a connector is unresolved.
-5. To combine regions or refine labels with Blender's native Draw Face Sets brush, expand **Options**. Face Sets are cleared on both resulting parts; analyze the selected piece again if it needs another automatic split.
+4. Click **Merge Face Sets**, then click the source and destination regions and press Enter. Or drag from the source onto the destination to merge immediately. Right-click clears the selection; Esc exits without changing the mesh. The source labels are reassigned to the destination without moving vertices.
+5. Apply and confirm the connector before splitting the next region. The add-on blocks another split while a connector is unresolved.
+6. To refine boundaries with Blender's native Draw Face Sets brush, expand **Options**. Face Sets are cleared on both resulting parts; analyze the selected piece again if it needs another automatic split.
 
-The curvature angle and scale, minimum region size, merge tools, and cleanup controls are in the collapsed **Options** section. Geometry regions are editable proposals: the analyzer can separate clear forms such as ears, eyes, and muzzle on suitable meshes, but it does not recognize semantic labels such as "nose" or "face". Use the native Face Set brush to adjust boundaries before extracting.
+The curvature angle and scale, minimum region size, and cleanup controls are in the collapsed **Options** section. Geometry regions are editable proposals: the analyzer can separate clear forms such as ears, eyes, and muzzle on suitable meshes, but it does not recognize semantic labels such as "nose" or "face". Use the native Face Set brush to adjust boundaries before extracting.
 
 ## Prototype limitations
 

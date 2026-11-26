@@ -92,21 +92,22 @@ class PSS_PT_panel(bpy.types.Panel):
     @staticmethod
     def _draw_geometry_segmentation(layout, settings, obj):
         box = layout.box()
-        box.label(text="Choose the central base for male pins", icon="MOD_DECIM")
-        box.prop(settings, "geometry_mother_face_set", text="Mother (Male Pins)")
-        box.prop(settings, "geometry_target_face_set", text="Part (Female Socket)")
-        box.label(text="The analyzer preselects the region nearest the mesh center.", icon="INFO")
+        box.label(text="Central Piece and Regions", icon="MOD_DECIM")
+        box.prop(settings, "geometry_mother_face_set", text="Mother")
+        box.prop(settings, "geometry_target_face_set", text="Part")
+        box.label(text="Center region is selected by default.", icon="INFO")
+        box.operator("print_splitter.start_face_set_merge", text="Merge Face Sets", icon="AUTOMERGE_ON")
         if settings.geometry_target_face_set == settings.geometry_mother_face_set:
-            box.label(text="Choose a different region to extract.", icon="ERROR")
+            box.label(text="Part must differ from Mother.", icon="ERROR")
         else:
-            box.operator("print_splitter.extract_part", text="Extract Selected Region", icon="MOD_BOOLEAN")
+            box.operator("print_splitter.extract_part", text="Extract Part", icon="MOD_BOOLEAN")
+        box.label(text="Drag merge · 2 clicks + Enter", icon="INFO")
 
         row = layout.row(align=True)
         row.prop(settings, "geometry_partition_method", text="")
         row.operator("print_splitter.analyze_geometry", text="Reanalyze", icon="FILE_REFRESH")
         if getattr(obj, "use_dynamic_topology_sculpting", False):
             layout.label(text="Disable Dyntopo before editing generated regions.", icon="ERROR")
-        layout.label(text="Refine regions with Blender's Face Set brush, or merge them in Options.", icon="INFO")
         PSS_PT_panel._draw_advanced_toggle(layout, settings)
         if settings.show_advanced_options:
             PSS_PT_panel._draw_advanced_options(layout, settings, obj, include_geometry=True)
@@ -139,9 +140,6 @@ class PSS_PT_panel(bpy.types.Panel):
                 box.prop(settings, "geometry_feature_scale_percent")
                 box.prop(settings, "geometry_min_region_percent")
             if obj.get(GEOMETRY_SEGMENTATION_KEY):
-                box.label(text="Merge selected region into:")
-                box.prop(settings, "geometry_merge_into_face_set", text="")
-                box.operator("print_splitter.merge_geometry_facesets", text="Merge Regions", icon="AUTOMERGE_ON")
                 row = box.row(align=True)
                 row.operator("print_splitter.native_faceset_brush", text="Face Set Brush", icon="BRUSH_DATA")
                 row.operator("print_splitter.refresh_geometry_regions", text="Refresh", icon="FILE_REFRESH")
