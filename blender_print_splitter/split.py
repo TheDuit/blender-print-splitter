@@ -15,8 +15,10 @@ from .core import (
     FACE_SET_ATTRIBUTE,
     FACE_SET_KEY,
     GEOMETRY_FACE_SET_SUMMARY_KEY,
+    GEOMETRY_MOTHER_FACE_SET_KEY,
     GEOMETRY_SEGMENTATION_KEY,
     MASK_ATTRIBUTE,
+    MOTHER_PART_ID_KEY,
     PAIR_ID_KEY,
     add_pair_id,
     PART_ID_KEY,
@@ -350,17 +352,34 @@ class PSS_OT_extract_part(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
+        from .connectors import has_pending_connector
+
         return (
             context.mode == "SCULPT"
             and is_mesh_object(obj)
             and obj.get(ROLE_KEY) in {ROLE_WORKING, ROLE_DIVISION}
             and not getattr(obj, "use_dynamic_topology_sculpting", False)
+            and not has_pending_connector(obj)
         )
 
     def execute(self, context):
         source = context.active_object
         settings = context.scene.print_splitter_settings
-        target_id = int(source.get(FACE_SET_KEY, TARGET_FACE_SET))
+        geometry_mode = source.get(GEOMETRY_SEGMENTATION_KEY, "")
+        if geometry_mode:
+            try:
+                target_id = int(settings.geometry_target_face_set.rsplit("_", 1)[1])
+            except (AttributeError, IndexError, ValueError):
+                self.report({"ERROR"}, "Choose a valid Face Set region to extract.")
+                return {"CANCELLED"}
+            source[FACE_SET_KEY] = target_id
+        else:
+            target_id = int(source.get(FACE_SET_KEY, TARGET_FACE_SET))
+        mother_region_id = int(source.get(GEOMETRY_MOTHER_FACE_SET_KEY, 0))
+        geometry_mother_mode = bool(geometry_mode and mother_region_id)
+        if geometry_mother_mode and target_id == mother_region_id:
+            self.report({"ERROR"}, "The mother region stays on the remainder. Choose another region to extract.")
+            return {"CANCELLED"}
         try:
             removed, merged, remaining_components = clean_face_set(source, settings)
             face_count = face_set_to_mask(source, target_id, settings.mask_threshold)
@@ -369,6 +388,9 @@ class PSS_OT_extract_part(bpy.types.Operator):
             return {"CANCELLED"}
 
         seam_frame = _seam_frame(source, target_id)
+        if geometry_mother_mode and seam_frame is None:
+            self.report({"ERROR"}, "No shared boundary was found. Refine the Face Set boundary before extracting this part.")
+            return {"CANCELLED"}
         source_matrix = source.matrix_world.copy()
         old_objects = {obj.as_pointer() for obj in bpy.data.objects}
         source_part_id = source.get(PART_ID_KEY, "")
@@ -411,28 +433,53 @@ class PSS_OT_extract_part(bpy.types.Operator):
         source[FACE_SET_KEY] = TARGET_FACE_SET
         source.pop(GEOMETRY_SEGMENTATION_KEY, None)
         source.pop(GEOMETRY_FACE_SET_SUMMARY_KEY, None)
+        source.pop(GEOMETRY_MOTHER_FACE_SET_KEY, None)
         mark_division(source, part_source_id)
         source["print_splitter_last_remaining_components"] = remaining_components
         part["print_splitter_prefix"] = "PS_Part"
         part[PART_ID_KEY] = uuid.uuid4().hex
         mark_division(part, part_source_id, parent_id=source_part_id)
         part.name = next_part_name(source.name)
+        if geometry_mother_mode:
+            mother_part_id = source.get(MOTHER_PART_ID_KEY) or source_part_id or source.get(PART_ID_KEY, "")
+            if mother_part_id:
+                source[MOTHER_PART_ID_KEY] = mother_part_id
+                part[MOTHER_PART_ID_KEY] = mother_part_id
         clear_mask(part.data)
         reset_face_sets(part.data)
         part[FACE_SET_KEY] = TARGET_FACE_SET
         part.pop(GEOMETRY_SEGMENTATION_KEY, None)
         part.pop(GEOMETRY_FACE_SET_SUMMARY_KEY, None)
+        part.pop(GEOMETRY_MOTHER_FACE_SET_KEY, None)
         move_object_to_collection(part, collection_for_parts(context.scene))
 
         has_remainder = source.name in bpy.data.objects and len(source.data.polygons) > 0
         if has_remainder:
-            add_pair_id(source, pair_id)
-            add_pair_id(part, pair_id)
             if seam_frame:
                 from .connectors import create_connector_pair
 
                 try:
-                    create_connector_pair(context, part, source, pair_id, *seam_frame)
+                    seam_location, seam_axis = seam_frame
+                    if geometry_mother_mode:
+                        create_connector_pair(
+                            context,
+                            source,
+                            part,
+                            pair_id,
+                            seam_location,
+                            -seam_axis,
+                        )
+                    else:
+                        create_connector_pair(
+                            context,
+                            part,
+                            source,
+                            pair_id,
+                            seam_location,
+                            seam_axis,
+                        )
+                    add_pair_id(source, pair_id)
+                    add_pair_id(part, pair_id)
                 except (RuntimeError, ValueError) as exc:
                     self.report({"WARNING"}, f"The split is complete, but the connector could not be created: {exc}")
             else:

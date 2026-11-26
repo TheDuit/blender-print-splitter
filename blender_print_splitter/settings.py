@@ -4,7 +4,13 @@ import json
 
 import bpy
 
-from .core import GEOMETRY_FACE_SET_SUMMARY_KEY, FACE_SET_KEY, TARGET_FACE_SET, is_mesh_object
+from .core import (
+    FACE_SET_KEY,
+    GEOMETRY_FACE_SET_SUMMARY_KEY,
+    GEOMETRY_MOTHER_FACE_SET_KEY,
+    TARGET_FACE_SET,
+    is_mesh_object,
+)
 from .registration import register_classes, unregister_class_by_name
 
 
@@ -58,6 +64,21 @@ def _set_geometry_target(self, context):
         obj[FACE_SET_KEY] = int(identifier.rsplit("_", 1)[1])
     except ValueError:
         return
+    if context.area:
+        context.area.tag_redraw()
+
+
+def _set_geometry_mother(self, context):
+    obj = context.active_object if context else None
+    identifier = getattr(self, "geometry_mother_face_set", "")
+    if not is_mesh_object(obj) or not identifier.startswith("FACE_SET_"):
+        return
+    try:
+        mother_face_set = int(identifier.rsplit("_", 1)[1])
+    except ValueError:
+        return
+    obj[GEOMETRY_MOTHER_FACE_SET_KEY] = mother_face_set
+    obj[FACE_SET_KEY] = mother_face_set
     if context.area:
         context.area.tag_redraw()
 
@@ -145,6 +166,13 @@ class PSS_Settings(bpy.types.PropertyGroup):
         update=_set_geometry_target,
         options={"SKIP_SAVE"},
     )
+    geometry_mother_face_set: bpy.props.EnumProperty(
+        name="Mother Region",
+        description="Keep this central region on the remainder and add male pins to it",
+        items=_geometry_face_set_items,
+        update=_set_geometry_mother,
+        options={"SKIP_SAVE"},
+    )
     geometry_merge_into_face_set: bpy.props.EnumProperty(
         name="Merge Into",
         description="Destination region for the selected Face Set",
@@ -165,11 +193,20 @@ class PSS_Settings(bpy.types.PropertyGroup):
         update=_refresh_connectors,
     )
     connector_depth_mm: bpy.props.FloatProperty(
-        name="Connector Depth (mm)",
+        name="Socket / Pin Reach (mm)",
         default=3.0,
         min=0.5,
         max=50.0,
         precision=2,
+        update=_refresh_connectors,
+    )
+    connector_embed_depth_mm: bpy.props.FloatProperty(
+        name="Pin Embed Depth (mm)",
+        default=5.0,
+        min=0.5,
+        max=50.0,
+        precision=2,
+        description="How far the male pin extends back into its base part",
         update=_refresh_connectors,
     )
     connector_clearance_mm: bpy.props.FloatProperty(

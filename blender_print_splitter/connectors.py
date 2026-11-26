@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import json
+from array import array
 
 import bpy
 from .registration import register_classes, unregister_classes
@@ -12,6 +13,7 @@ from mathutils import Vector
 
 from .core import (
     PAIR_ID_KEY,
+    PAIR_IDS_KEY,
     PART_ID_KEY,
     activate_only,
     has_pair_id,
@@ -56,23 +58,35 @@ def _dimensions(scene):
     settings = scene.print_splitter_settings
     diameter = mm_to_bu(settings.connector_diameter_mm, scene)
     depth = mm_to_bu(settings.connector_depth_mm, scene)
+    embed_depth = mm_to_bu(settings.connector_embed_depth_mm, scene)
     radial_clearance = mm_to_bu(settings.connector_clearance_mm * 0.5, scene)
     overlap = mm_to_bu(BOOLEAN_OVERLAP_MM, scene)
-    return max(diameter * 0.5, 1e-6), max(depth + overlap, 1e-6), max(radial_clearance, 0.0), overlap
+    return (
+        max(diameter * 0.5, 1e-6),
+        max(depth, 1e-6),
+        max(embed_depth, 1e-6),
+        max(radial_clearance, 0.0),
+        overlap,
+    )
 
 
 def _regenerate_helper(obj, scene):
-    radius, length, radial_clearance, overlap = _dimensions(scene)
+    radius, depth, embed_depth, radial_clearance, overlap = _dimensions(scene)
     kind = obj.get(KIND_KEY)
     if kind == KIND_CUTTER:
         radius += radial_clearance
+        start = -overlap
+        length = depth + (overlap * 2.0)
+    elif kind == KIND_PIN:
+        start = -embed_depth
+        length = embed_depth + depth + overlap
     elif kind != KIND_PIN:
         return
     mesh = _cylinder_mesh(
         obj.name + "_Mesh",
         radius,
         length,
-        start=-overlap,
+        start=start,
     )
     old_mesh = obj.data
     obj.data = mesh
@@ -102,12 +116,41 @@ def helpers_for_pair(pair_id):
     return helpers
 
 
+def targets_for_pair(pair_id):
+    control = helpers_for_pair(pair_id)[KIND_CONTROL]
+    if control is None:
+        return None, None
+    return (
+        _object_by_part_id(control.get(PIN_TARGET_ID_KEY, "")),
+        _object_by_part_id(control.get(SOCKET_TARGET_ID_KEY, "")),
+    )
+
+
 def pair_is_confirmed(obj, pair_id):
     try:
         confirmed_pairs = json.loads(obj.get(CONFIRMED_PAIRS_KEY, "[]"))
     except (TypeError, ValueError):
         confirmed_pairs = []
     return pair_id in confirmed_pairs
+
+
+def pending_connector_pairs(obj):
+    try:
+        pair_ids = json.loads(obj.get(PAIR_IDS_KEY, "[]"))
+    except (TypeError, ValueError):
+        pair_ids = []
+    current_pair_id = obj.get(PAIR_ID_KEY, "")
+    if current_pair_id and current_pair_id not in pair_ids:
+        pair_ids.append(current_pair_id)
+    try:
+        confirmed_pairs = set(json.loads(obj.get(CONFIRMED_PAIRS_KEY, "[]")))
+    except (TypeError, ValueError):
+        confirmed_pairs = set()
+    return [pair_id for pair_id in pair_ids if pair_id and pair_id not in confirmed_pairs]
+
+
+def has_pending_connector(obj):
+    return bool(obj and is_mesh_object(obj) and pending_connector_pairs(obj))
 
 
 @persistent
@@ -119,11 +162,14 @@ def _disable_legacy_connector_previews(_unused=None):
         # Add-on registration can run with Blender's restricted data proxy.
         # Timers retry after registration; load_post handles later file loads.
         return 0.1
+    scene = bpy.context.scene
     for obj in objects:
         for modifier in obj.modifiers:
             if modifier.type == "BOOLEAN" and modifier.name.startswith(BOOLEAN_PREFIX):
                 modifier.show_viewport = False
                 modifier.show_render = False
+        if scene and obj.get(KIND_KEY) in {KIND_PIN, KIND_CUTTER}:
+            _regenerate_helper(obj, scene)
     return None
 
 
@@ -146,13 +192,13 @@ def _make_controller(context, pair_id, location, axis):
 
 
 def _make_helper(context, name, kind, pair_id, controller):
-    radius, _length, radial_clearance, _overlap = _dimensions(context.scene)
+    radius, depth, _embed_depth, radial_clearance, _overlap = _dimensions(context.scene)
     if kind == KIND_CUTTER:
         radius += radial_clearance
     mesh = _cylinder_mesh(
         name + "_Mesh",
         radius,
-        max(mm_to_bu(context.scene.print_splitter_settings.connector_depth_mm, context.scene), 1e-6),
+        depth,
         start=0.0,
     )
     obj = bpy.data.objects.new(name, mesh)
@@ -179,22 +225,27 @@ def _add_boolean(target, operand, operation, label, solver):
     return modifier
 
 
-def create_connector_pair(context, part, remainder, pair_id, seam_location, seam_axis):
-    """Create one pin/socket pair at the split interface, with a shared transform control."""
-    if not is_mesh_object(part) or not is_mesh_object(remainder):
+def create_connector_pair(context, pin_target, socket_target, pair_id, seam_location, seam_axis):
+    """Create an embedded male pin and matching female cutter for two split meshes."""
+    if not is_mesh_object(pin_target) or not is_mesh_object(socket_target):
         raise ValueError("A mesh is required on both sides of the split.")
     existing = helpers_for_pair(pair_id)
     if all(existing.values()):
         return existing
+    _remove_helpers(existing)
 
     axis = Vector(seam_axis)
     if axis.length_squared < 1e-12:
         raise ValueError("Could not determine a stable connector direction at the split.")
     control = _make_controller(context, pair_id, Vector(seam_location), axis)
-    control[PIN_TARGET_ID_KEY] = part.get(PART_ID_KEY, "")
-    control[SOCKET_TARGET_ID_KEY] = remainder.get(PART_ID_KEY, "")
-    pin = _make_helper(context, f"PS_Pin_{pair_id[:6]}", KIND_PIN, pair_id, control)
-    socket = _make_helper(context, f"PS_Socket_{pair_id[:6]}", KIND_CUTTER, pair_id, control)
+    control[PIN_TARGET_ID_KEY] = pin_target.get(PART_ID_KEY, "")
+    control[SOCKET_TARGET_ID_KEY] = socket_target.get(PART_ID_KEY, "")
+    try:
+        pin = _make_helper(context, f"PS_Pin_{pair_id[:6]}", KIND_PIN, pair_id, control)
+        socket = _make_helper(context, f"PS_Socket_{pair_id[:6]}", KIND_CUTTER, pair_id, control)
+    except Exception:
+        _remove_helpers(helpers_for_pair(pair_id))
+        raise
     return {KIND_CONTROL: control, KIND_PIN: pin, KIND_CUTTER: socket}
 
 
@@ -251,13 +302,47 @@ def _remove_helpers(helpers):
             bpy.data.meshes.remove(mesh)
 
 
+def _mesh_quality(mesh):
+    """Return absolute volume and the count of non-two-face edges."""
+    if len(mesh.vertices) == 0 or len(mesh.polygons) == 0:
+        return 0.0, len(mesh.edges)
+    edge_uses = array("i", [0]) * len(mesh.edges)
+    loop_edges = array("i", [0]) * len(mesh.loops)
+    mesh.loops.foreach_get("edge_index", loop_edges)
+    for edge_index in loop_edges:
+        edge_uses[edge_index] += 1
+    nonmanifold_edges = sum(uses != 2 for uses in edge_uses)
+
+    mesh.calc_loop_triangles()
+    origin = mesh.vertices[0].co
+    signed_volume = 0.0
+    for triangle in mesh.loop_triangles:
+        first, second, third = (mesh.vertices[index].co - origin for index in triangle.vertices)
+        signed_volume += first.dot(second.cross(third)) / 6.0
+    return abs(signed_volume), nonmanifold_edges
+
+
 def _apply_boolean(context, target, operand, operation, label, solver, pending):
+    # Let Manifold attempt to normalize small topology defects from Mask Slice.
+    # Its result is still rejected below unless it is closed and changes volume
+    # in the expected direction; the caller restores both target meshes on error.
+    original_volume, _open_edges = _mesh_quality(target.data)
+    if original_volume <= 1e-15:
+        raise RuntimeError(f"{label} target has no measurable enclosed volume.")
     modifier = _add_boolean(target, operand, operation, label, solver)
     pending.append((target, modifier.name))
     activate_only(context, target)
     result = bpy.ops.object.modifier_apply(modifier=modifier.name)
     if "FINISHED" not in result or not len(target.data.polygons):
         raise RuntimeError(f"The {solver.title()} solver could not produce a valid mesh.")
+    result_volume, open_edges = _mesh_quality(target.data)
+    if open_edges:
+        raise RuntimeError(f"{label} left {open_edges} open or non-manifold edges; the operation was rolled back.")
+    epsilon = max(original_volume * 1e-8, 1e-15)
+    if operation == "UNION" and result_volume <= original_volume + epsilon:
+        raise RuntimeError(f"{label} did not add a pin that intersects the target mesh.")
+    if operation == "DIFFERENCE" and result_volume >= original_volume - epsilon:
+        raise RuntimeError(f"{label} did not cut a socket into the target mesh.")
 
 
 def _confirm_connector(context, pair_id, solver):
@@ -280,55 +365,59 @@ def _confirm_connector(context, pair_id, solver):
             control[PIN_TARGET_ID_KEY] = pin_target_id
             control[SOCKET_TARGET_ID_KEY] = socket_target_id
 
-    part = _object_by_part_id(pin_target_id)
-    remainder = _object_by_part_id(socket_target_id)
-    if part is None or remainder is None or part is remainder:
+    pin_target = _object_by_part_id(pin_target_id)
+    socket_target = _object_by_part_id(socket_target_id)
+    if pin_target is None or socket_target is None or pin_target is socket_target:
         raise ValueError("Could not find both meshes associated with this connector.")
-    if part.data is remainder.data:
+    if pin_target.data is socket_target.data:
         raise ValueError("The two parts must use separate mesh data before confirming the connector.")
 
-    original_meshes = [part.data, remainder.data]
-    backups = [(part, part.data.copy()), (remainder, remainder.data.copy())]
+    original_mesh_names = [pin_target.data.name, socket_target.data.name]
+    backups = [(pin_target, pin_target.data.copy()), (socket_target, socket_target.data.copy())]
     pending = []
     try:
-        _apply_boolean(context, part, pin, "UNION", "Pin Union", solver, pending)
-        _apply_boolean(context, remainder, socket, "DIFFERENCE", "Socket Cut", solver, pending)
+        _apply_boolean(context, pin_target, pin, "UNION", "Pin Union", solver, pending)
+        _apply_boolean(context, socket_target, socket, "DIFFERENCE", "Socket Cut", solver, pending)
     except (RuntimeError, ValueError, TypeError) as exc:
         for target, backup in backups:
-            current_mesh = target.data
+            current_mesh_name = target.data.name
             target.data = backup
-            if current_mesh.users == 0:
+            current_mesh = bpy.data.meshes.get(current_mesh_name)
+            if current_mesh is not None and current_mesh.users == 0:
                 bpy.data.meshes.remove(current_mesh)
-        for original_mesh in original_meshes:
-            if original_mesh.users == 0:
+        for mesh_name in original_mesh_names:
+            original_mesh = bpy.data.meshes.get(mesh_name)
+            if original_mesh is not None and original_mesh.users == 0:
                 bpy.data.meshes.remove(original_mesh)
         for target, modifier_name in pending:
             modifier = target.modifiers.get(modifier_name)
             if modifier is not None:
                 target.modifiers.remove(modifier)
         for _target, backup in backups:
-            if backup.users == 0:
-                bpy.data.meshes.remove(backup)
-        activate_only(context, part)
-        requirement = " Both parts must be manifold." if solver == "MANIFOLD" else ""
-        raise RuntimeError(f"{solver.title()} Boolean failed.{requirement} {exc}") from exc
+            backup_mesh = bpy.data.meshes.get(backup.name)
+            if backup_mesh is not None and backup_mesh.users == 0:
+                bpy.data.meshes.remove(backup_mesh)
+        activate_only(context, pin_target)
+        raise RuntimeError(f"{solver.title()} Boolean failed; both meshes were restored. {exc}") from exc
 
     for _target, backup in backups:
-        if backup.users == 0:
-            bpy.data.meshes.remove(backup)
-    for original_mesh in original_meshes:
-        if original_mesh.users == 0:
+        backup_mesh = bpy.data.meshes.get(backup.name)
+        if backup_mesh is not None and backup_mesh.users == 0:
+            bpy.data.meshes.remove(backup_mesh)
+    for mesh_name in original_mesh_names:
+        original_mesh = bpy.data.meshes.get(mesh_name)
+        if original_mesh is not None and original_mesh.users == 0:
             bpy.data.meshes.remove(original_mesh)
-    for target in (part, remainder):
+    for target in (pin_target, socket_target):
         for modifier in list(target.modifiers):
             if modifier.type == "BOOLEAN" and modifier.name.startswith(BOOLEAN_PREFIX):
                 target.modifiers.remove(modifier)
-    _remember_confirmed_pair(part, pair_id)
-    _remember_confirmed_pair(remainder, pair_id)
-    part[CONFIRMED_SOLVER_KEY] = solver
-    remainder[CONFIRMED_SOLVER_KEY] = solver
+    _remember_confirmed_pair(pin_target, pair_id)
+    _remember_confirmed_pair(socket_target, pair_id)
+    pin_target[CONFIRMED_SOLVER_KEY] = solver
+    socket_target[CONFIRMED_SOLVER_KEY] = solver
     _remove_helpers(helpers)
-    activate_only(context, part)
+    activate_only(context, pin_target)
 
 
 class PSS_OT_confirm_connector(bpy.types.Operator):
@@ -337,11 +426,16 @@ class PSS_OT_confirm_connector(bpy.types.Operator):
     bl_description = "Choose a Boolean solver, confirm, and apply the connector to both parts"
     bl_options = {"REGISTER", "UNDO"}
 
+    pair_id: bpy.props.StringProperty(
+        name="Connector Pair",
+        options={"HIDDEN"},
+    )
+
     solver: bpy.props.EnumProperty(
         name="Boolean Solver",
         description="Choose the Boolean algorithm used to apply both connector operations",
         items=(
-            ("MANIFOLD", "Manifold", "Fast; requires manifold input meshes"),
+            ("MANIFOLD", "Manifold", "Fast; may correct minor split defects and validates both outputs"),
             ("EXACT", "Exact", "Handles overlapping geometry, with higher cost"),
             ("FLOAT", "Float", "Fast; may fail with overlapping geometry"),
         ),
@@ -351,14 +445,13 @@ class PSS_OT_confirm_connector(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         obj = context.active_object
-        pair_id = (obj.get(PAIR_ID_KEY, "") or obj.get(HELPER_PAIR_KEY, "")) if obj else ""
-        return (
-            context.mode == "OBJECT"
-            and obj is not None
-            and (is_mesh_object(obj) or bool(obj.get(HELPER_PAIR_KEY, "")))
-            and bool(pair_id)
-            and not pair_is_confirmed(obj, pair_id)
-        )
+        if context.mode != "OBJECT" or obj is None:
+            return False
+        if is_mesh_object(obj):
+            return bool(pending_connector_pairs(obj))
+        pair_id = obj.get(HELPER_PAIR_KEY, "")
+        pin_target, _socket_target = targets_for_pair(pair_id)
+        return bool(pair_id and pin_target and not pair_is_confirmed(pin_target, pair_id))
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(
@@ -376,13 +469,13 @@ class PSS_OT_confirm_connector(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.active_object
-        pair_id = obj.get(PAIR_ID_KEY, "") or obj.get(HELPER_PAIR_KEY, "")
+        pair_id = self.pair_id or obj.get(PAIR_ID_KEY, "") or obj.get(HELPER_PAIR_KEY, "")
         try:
             _confirm_connector(context, pair_id, self.solver)
         except (RuntimeError, ValueError) as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        self.report({"INFO"}, f"Connector applied to both parts with the {self.solver.title()} solver.")
+        self.report({"INFO"}, f"Male pin and female socket applied with the {self.solver.title()} solver.")
         return {"FINISHED"}
 
 

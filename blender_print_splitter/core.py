@@ -20,6 +20,8 @@ FACE_SET_KEY = "print_splitter_face_set_id"
 IS_DIVISION_KEY = "print_splitter_is_division"
 GEOMETRY_SEGMENTATION_KEY = "print_splitter_geometry_segmentation"
 GEOMETRY_FACE_SET_SUMMARY_KEY = "print_splitter_geometry_face_set_summary"
+GEOMETRY_MOTHER_FACE_SET_KEY = "print_splitter_geometry_mother_face_set"
+MOTHER_PART_ID_KEY = "print_splitter_mother_part_id"
 
 ROLE_ORIGINAL = "ORIGINAL"
 ROLE_WORKING = "WORKING"
@@ -217,6 +219,10 @@ def prepare_division(context, obj):
 def start_work_object(context, obj):
     if not is_mesh_object(obj):
         raise ValueError("Select a mesh object.")
+    from .connectors import has_pending_connector
+
+    if has_pending_connector(obj):
+        raise ValueError("Apply the pending connector before starting another split.")
     role = role_of(obj)
     if role in {ROLE_WORKING, ROLE_DIVISION} or is_division(obj):
         return prepare_division(context, obj)
@@ -251,6 +257,11 @@ class PSS_OT_start_operation(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.active_object
+        from .connectors import has_pending_connector
+
+        if has_pending_connector(obj):
+            self.report({"ERROR"}, "Apply the pending connector before starting another split.")
+            return {"CANCELLED"}
         if obj.mode != "OBJECT":
             bpy.ops.object.mode_set(mode="OBJECT")
         try:

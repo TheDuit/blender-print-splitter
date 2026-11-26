@@ -8,7 +8,7 @@ import json
 import math
 
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 from .registration import register_classes, unregister_classes
 
 from .core import (
@@ -16,7 +16,10 @@ from .core import (
     FACE_SET_ATTRIBUTE,
     FACE_SET_KEY,
     GEOMETRY_FACE_SET_SUMMARY_KEY,
+    GEOMETRY_MOTHER_FACE_SET_KEY,
     GEOMETRY_SEGMENTATION_KEY,
+    MOTHER_PART_ID_KEY,
+    PART_ID_KEY,
     ROLE_DIVISION,
     ROLE_KEY,
     ROLE_WORKING,
@@ -233,6 +236,7 @@ def analyze_geometry(
         raise ValueError("Choose a supported geometry analysis method.")
     obj.pop(GEOMETRY_SEGMENTATION_KEY, None)
     obj.pop(GEOMETRY_FACE_SET_SUMMARY_KEY, None)
+    obj.pop(GEOMETRY_MOTHER_FACE_SET_KEY, None)
     reset_face_sets(obj.data)
 
     labels, region_count = _face_region_labels(
@@ -298,6 +302,55 @@ def face_set_counts(obj):
     return counts
 
 
+def _most_central_face_set_id(obj, candidates=None):
+    """Pick the generated region whose area-weighted center is nearest the mesh center."""
+    mesh = obj.data
+    attribute = mesh.attributes.get(FACE_SET_ATTRIBUTE)
+    if attribute is None or not mesh.vertices or not mesh.polygons:
+        return None
+    values = _read_values(attribute)
+    candidate_ids = set(candidates or (int(value) for value in values if value >= TARGET_FACE_SET))
+    if not candidate_ids:
+        return None
+
+    matrix = obj.matrix_world
+    linear = matrix.to_3x3()
+    minimum = Vector((math.inf, math.inf, math.inf))
+    maximum = Vector((-math.inf, -math.inf, -math.inf))
+    for vertex in mesh.vertices:
+        world_vertex = matrix @ vertex.co
+        for axis in range(3):
+            minimum[axis] = min(minimum[axis], world_vertex[axis])
+            maximum[axis] = max(maximum[axis], world_vertex[axis])
+    mesh_center = (minimum + maximum) * 0.5
+    try:
+        normal_matrix = linear.inverted().transposed()
+        determinant = abs(linear.determinant())
+    except ValueError:
+        normal_matrix = Matrix.Identity(3)
+        determinant = 1.0
+
+    weighted_centers = {face_set_id: Vector((0.0, 0.0, 0.0)) for face_set_id in candidate_ids}
+    region_areas = {face_set_id: 0.0 for face_set_id in candidate_ids}
+    for polygon, face_set_id in zip(mesh.polygons, values):
+        face_set_id = int(face_set_id)
+        if face_set_id not in candidate_ids:
+            continue
+        area = _world_face_area(polygon, linear, normal_matrix, determinant)
+        if area <= 1e-12:
+            area = 1.0
+        weighted_centers[face_set_id] += matrix @ polygon.center * area
+        region_areas[face_set_id] += area
+
+    ranked = []
+    for face_set_id, total_area in region_areas.items():
+        if total_area <= 0.0:
+            continue
+        center = weighted_centers[face_set_id] / total_area
+        ranked.append(((center - mesh_center).length_squared, -total_area, face_set_id))
+    return min(ranked)[2] if ranked else None
+
+
 def merge_face_sets(obj, source_id, destination_id):
     if source_id == destination_id:
         raise ValueError("Choose two different Face Sets to merge.")
@@ -354,10 +407,22 @@ class PSS_OT_analyze_geometry(bpy.types.Operator):
         except (RuntimeError, ValueError) as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        settings.geometry_target_face_set = f"FACE_SET_{largest_id}"
-        alternate = next((face_id for face_id in counts if face_id != largest_id), largest_id)
-        settings.geometry_merge_into_face_set = f"FACE_SET_{alternate}"
-        self.report({"INFO"}, f"Generated {len(counts)} editable geometry regions.")
+        obj = context.active_object
+        central_id = _most_central_face_set_id(obj, counts) or largest_id
+        settings.geometry_mother_face_set = f"FACE_SET_{central_id}"
+        alternate = max(
+            (face_id for face_id in counts if face_id != central_id),
+            key=lambda face_id: counts[face_id],
+            default=central_id,
+        )
+        settings.geometry_target_face_set = f"FACE_SET_{alternate}"
+        settings.geometry_merge_into_face_set = f"FACE_SET_{central_id}"
+        if obj.get(PART_ID_KEY):
+            obj[MOTHER_PART_ID_KEY] = obj[PART_ID_KEY]
+        self.report(
+            {"INFO"},
+            f"Generated {len(counts)} editable regions; Face Set {central_id} is the initial mother.",
+        )
         return {"FINISHED"}
 
 
@@ -396,8 +461,14 @@ class PSS_OT_merge_geometry_facesets(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         settings.geometry_target_face_set = f"FACE_SET_{destination_id}"
+        mother_id = int(obj.get(GEOMETRY_MOTHER_FACE_SET_KEY, TARGET_FACE_SET))
+        if source_id == mother_id:
+            settings.geometry_mother_face_set = f"FACE_SET_{destination_id}"
         remaining = face_set_counts(obj)
-        alternate = next((face_id for face_id in remaining if face_id != destination_id), destination_id)
+        alternate = next(
+            (face_id for face_id in remaining if face_id != destination_id),
+            destination_id,
+        )
         settings.geometry_merge_into_face_set = f"FACE_SET_{alternate}"
         self.report({"INFO"}, f"Merged {count} faces into Face Set {destination_id}.")
         return {"FINISHED"}
@@ -430,6 +501,12 @@ class PSS_OT_refresh_geometry_regions(bpy.types.Operator):
         active_id = int(obj.get(FACE_SET_KEY, TARGET_FACE_SET))
         if active_id not in counts:
             active_id = max(counts, key=counts.get)
+        mother_id = int(obj.get(GEOMETRY_MOTHER_FACE_SET_KEY, TARGET_FACE_SET))
+        if mother_id not in counts:
+            mother_id = max(counts, key=counts.get)
+        settings.geometry_mother_face_set = f"FACE_SET_{mother_id}"
+        if active_id == mother_id:
+            active_id = next((face_id for face_id in counts if face_id != mother_id), mother_id)
         settings.geometry_target_face_set = f"FACE_SET_{active_id}"
         destination_id = next((face_id for face_id in counts if face_id != active_id), active_id)
         settings.geometry_merge_into_face_set = f"FACE_SET_{destination_id}"
@@ -487,6 +564,7 @@ class PSS_OT_manual_faceset_mode(bpy.types.Operator):
         obj[FACE_SET_KEY] = TARGET_FACE_SET
         obj.pop(GEOMETRY_SEGMENTATION_KEY, None)
         obj.pop(GEOMETRY_FACE_SET_SUMMARY_KEY, None)
+        obj.pop(GEOMETRY_MOTHER_FACE_SET_KEY, None)
         obj.update_tag(refresh={"DATA"})
         context.area.tag_redraw()
         self.report({"INFO"}, "Generated regions cleared. Manual Face Set painting is ready.")

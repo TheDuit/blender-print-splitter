@@ -3,11 +3,21 @@
 import bpy
 from .registration import register_classes, unregister_classes
 
-from .connectors import CONFIRMED_SOLVER_KEY, HELPER_PAIR_KEY, helpers_for_pair, pair_is_confirmed
+from .connectors import (
+    CONFIRMED_SOLVER_KEY,
+    HELPER_PAIR_KEY,
+    has_pending_connector,
+    helpers_for_pair,
+    pair_is_confirmed,
+    pending_connector_pairs,
+    targets_for_pair,
+)
 from .core import (
     GEOMETRY_SEGMENTATION_KEY,
     IS_DIVISION_KEY,
+    MOTHER_PART_ID_KEY,
     PAIR_ID_KEY,
+    PART_ID_KEY,
     ROLE_DIVISION,
     ROLE_KEY,
     ROLE_WORKING,
@@ -37,6 +47,12 @@ class PSS_PT_panel(bpy.types.Panel):
         selected_helper_pair = obj.get(HELPER_PAIR_KEY, "")
         if selected_helper_pair:
             self._draw_connector_controls(layout, settings, obj, selected_helper_pair)
+            return
+
+        if has_pending_connector(obj):
+            layout.label(text="Resolve this connector before splitting another part.", icon="ERROR")
+            for pair_id in pending_connector_pairs(obj):
+                self._draw_connector_controls(layout, settings, obj, pair_id)
             return
 
         box = layout.box()
@@ -76,9 +92,14 @@ class PSS_PT_panel(bpy.types.Panel):
     @staticmethod
     def _draw_geometry_segmentation(layout, settings, obj):
         box = layout.box()
-        box.label(text="Choose a region to extract", icon="MOD_DECIM")
-        box.prop(settings, "geometry_target_face_set", text="Region")
-        box.operator("print_splitter.extract_part", text="Extract Selected Region", icon="MOD_BOOLEAN")
+        box.label(text="Choose the central base for male pins", icon="MOD_DECIM")
+        box.prop(settings, "geometry_mother_face_set", text="Mother (Male Pins)")
+        box.prop(settings, "geometry_target_face_set", text="Part (Female Socket)")
+        box.label(text="The analyzer preselects the region nearest the mesh center.", icon="INFO")
+        if settings.geometry_target_face_set == settings.geometry_mother_face_set:
+            box.label(text="Choose a different region to extract.", icon="ERROR")
+        else:
+            box.operator("print_splitter.extract_part", text="Extract Selected Region", icon="MOD_BOOLEAN")
 
         row = layout.row(align=True)
         row.prop(settings, "geometry_partition_method", text="")
@@ -139,9 +160,16 @@ class PSS_PT_panel(bpy.types.Panel):
             return
 
         box.label(text="Preview only; no Boolean is active yet.", icon="INFO")
-        box.prop(settings, "connector_diameter_mm")
-        box.prop(settings, "connector_depth_mm")
-        box.prop(settings, "connector_clearance_mm")
+        pin_target, socket_target = targets_for_pair(pair_id)
+        box.label(text=f"Male pin: {pin_target.name if pin_target else 'Missing target'}")
+        box.label(text=f"Female socket: {socket_target.name if socket_target else 'Missing target'}")
+        embed_label = "Pin Embed Depth (mm)"
+        if pin_target and pin_target.get(MOTHER_PART_ID_KEY) == pin_target.get(PART_ID_KEY):
+            embed_label = "Embed in Mother (mm)"
+        box.prop(settings, "connector_diameter_mm", text="Diameter (mm)")
+        box.prop(settings, "connector_depth_mm", text="Reach / Socket (mm)")
+        box.prop(settings, "connector_embed_depth_mm", text=embed_label)
+        box.prop(settings, "connector_clearance_mm", text="Fit Clearance (mm)")
         helpers = helpers_for_pair(pair_id)
         control = helpers.get("CONTROL")
         if control is not None:
@@ -152,8 +180,9 @@ class PSS_PT_panel(bpy.types.Panel):
             box.prop(control, "scale", text="Scale")
         else:
             box.label(text="No connector helper is linked to this split.", icon="INFO")
-        box.operator("print_splitter.confirm_connector", text="Apply Connector to Mesh", icon="CHECKMARK")
-        box.label(text="Choose the Boolean solver in the confirmation dialog.", icon="INFO")
+        confirm = box.operator("print_splitter.confirm_connector", text="Apply Connector to Mesh", icon="CHECKMARK")
+        confirm.pair_id = pair_id
+        box.label(text="Confirm this connector before splitting another part.", icon="INFO")
         if obj.get(PAIR_ID_KEY):
             box.operator("print_splitter.select_mate", icon="FILE_REFRESH")
 
