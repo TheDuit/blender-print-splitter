@@ -11,8 +11,12 @@ def _registered_class(name):
             if candidate.__name__ != name:
                 continue
             try:
-                if candidate.bl_rna.identifier == name:
-                    return candidate
+                identifier = candidate.bl_rna.identifier
+                if identifier == base.bl_rna.identifier:
+                    continue
+                registered = base.bl_rna_get_subclass_py(identifier, None)
+                if registered is not None:
+                    return registered
             except Exception:
                 continue
     return None
