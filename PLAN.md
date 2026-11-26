@@ -6,7 +6,7 @@ Build a Sculpt Mode add-on with two independent ways to mark a printable part: p
 
 The add-on is an independent project outside the Imobflow repository. **English is the default language for the UI, messages, and documentation.** The compatibility target is **Blender 5.3.0 and later**.
 
-## Implementation status — v0.3.7
+## Implementation status — v0.3.8
 
 - [x] Keep manual painting and geometry analysis as separate workflows.
 - [x] Use Blender's native **By Normals** and **Loose Parts** initializers for geometry analysis.
@@ -16,6 +16,7 @@ The add-on is an independent project outside the Imobflow repository. **English 
 - [x] Check Blender's RNA registry before unregistering stale Python class references.
 - [x] Build an installable extension ZIP and statically parse the Python modules.
 - [x] Verify register, repeated register/unregister, hot reload, and recovery from partial registration in Blender 5.3.0.
+- [x] Defer legacy Boolean preview cleanup until Blender exits its restricted registration context.
 - [ ] Run the complete workflow in Blender 5.3.0 on representative meshes; this remains the next validation step.
 
 ## Required workflow

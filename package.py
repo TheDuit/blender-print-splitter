@@ -6,7 +6,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parent
 PACKAGE = ROOT / "blender_print_splitter"
-OUTPUT = ROOT / "blender_print_splitter-0.3.7.zip"
+OUTPUT = ROOT / "blender_print_splitter-0.3.8.zip"
 
 with ZipFile(OUTPUT, "w", compression=ZIP_DEFLATED) as archive:
     for path in sorted(PACKAGE.iterdir()):

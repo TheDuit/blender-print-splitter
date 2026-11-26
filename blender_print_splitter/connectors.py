@@ -113,11 +113,18 @@ def pair_is_confirmed(obj, pair_id):
 @persistent
 def _disable_legacy_connector_previews(_unused=None):
     """Disable live Exact previews saved by earlier add-on versions."""
-    for obj in bpy.data.objects:
+    try:
+        objects = bpy.data.objects
+    except AttributeError:
+        # Add-on registration can run with Blender's restricted data proxy.
+        # Timers retry after registration; load_post handles later file loads.
+        return 0.1
+    for obj in objects:
         for modifier in obj.modifiers:
             if modifier.type == "BOOLEAN" and modifier.name.startswith(BOOLEAN_PREFIX):
                 modifier.show_viewport = False
                 modifier.show_render = False
+    return None
 
 
 def _make_controller(context, pair_id, location, axis):
@@ -410,13 +417,16 @@ CLASSES = (PSS_OT_confirm_connector, PSS_OT_select_mate)
 def register():
     _remove_load_post_handlers()
     bpy.app.handlers.load_post.append(_disable_legacy_connector_previews)
-    _disable_legacy_connector_previews()
+    if not bpy.app.timers.is_registered(_disable_legacy_connector_previews):
+        bpy.app.timers.register(_disable_legacy_connector_previews, first_interval=0.0)
     register_classes(CLASSES)
 
 
 def unregister():
     unregister_classes(CLASSES)
     _remove_load_post_handlers()
+    if bpy.app.timers.is_registered(_disable_legacy_connector_previews):
+        bpy.app.timers.unregister(_disable_legacy_connector_previews)
 
 
 def _remove_load_post_handlers():

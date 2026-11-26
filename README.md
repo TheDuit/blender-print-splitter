@@ -4,11 +4,11 @@ An independent Blender add-on for splitting printable parts from a sculpted mesh
 
 ## Compatibility and status
 
-Prototype version **0.3.7**, targeting **Blender 5.3.0 and later**. Registration lifecycle has been checked in Blender 5.3.0; the full split workflow still needs validation on representative models.
+Prototype version **0.3.8**, targeting **Blender 5.3.0 and later**. Registration and restricted-data startup have been checked in Blender 5.3.0; the full split workflow still needs validation on representative models.
 
 ## Installation
 
-1. Run `python3 package.py` from this directory to build `blender_print_splitter-0.3.7.zip`.
+1. Run `python3 package.py` from this directory to build `blender_print_splitter-0.3.8.zip`.
 2. In Blender, open **Edit > Preferences > Get Extensions > Install from Disk** and select the ZIP.
 3. Enable **Blender Print Splitter**, then open the **Print Splitter** tab in the 3D Viewport sidebar (`N`).
 
