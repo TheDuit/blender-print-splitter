@@ -1,0 +1,10 @@
+schema_version = "1.0.0"
+id = "blender_print_splitter"
+version = "0.3.3"
+name = "Blender Print Splitter"
+tagline = "Analyze Face Sets and split parts for 3D printing"
+maintainer = "Blender Print Splitter contributors"
+type = "add-on"
+tags = ["3D View", "Sculpt"]
+blender_version_min = "5.3.0"
+license = ["SPDX:GPL-3.0-or-later"]
