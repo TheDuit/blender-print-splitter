@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Blender Print Splitter",
     "author": "Blender Print Splitter contributors",
-    "version": (0, 3, 4),
+    "version": (0, 3, 5),
     "blender": (5, 3, 0),
     "location": "View3D > Sidebar > Print Splitter",
     "description": "Analyze or paint Face Sets and split parts for 3D printing",

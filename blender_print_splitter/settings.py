@@ -157,8 +157,13 @@ class PSS_Settings(bpy.types.PropertyGroup):
     )
 def register():
     if hasattr(bpy.types.Scene, "print_splitter_settings"):
-        del bpy.types.Scene.print_splitter_settings
-    settings_type = register_classes((PSS_Settings,))[0]
+        return
+    registered_types = register_classes((PSS_Settings,))
+    if not registered_types:
+        raise RuntimeError(
+            "PSS_Settings is already registered in Blender but cannot be resolved. Restart Blender and enable the add-on again."
+        )
+    settings_type = registered_types[0]
     bpy.types.Scene.print_splitter_settings = bpy.props.PointerProperty(type=settings_type)
 
 

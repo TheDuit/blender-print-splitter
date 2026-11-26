@@ -4,9 +4,13 @@ import bpy
 
 
 def _registered_class(name):
-    # This resolves only registered RNA subclasses; bpy.types attribute lookup
+    # Search the actual registrable base classes. bpy.types attribute lookup
     # can return an unregistered Python metaclass stub.
-    return bpy.types.Struct.bl_rna_get_subclass_py(name, None)
+    for base in (bpy.types.Operator, bpy.types.Panel, bpy.types.PropertyGroup):
+        registered = base.bl_rna_get_subclass_py(name, None)
+        if registered is not None:
+            return registered
+    return None
 
 
 def unregister_class_by_name(name):
@@ -33,12 +37,13 @@ def register_classes(classes):
                 continue
             try:
                 bpy.utils.register_class(cls)
-            except RuntimeError:
+            except RuntimeError as exc:
+                if "already registered as a subclass" not in str(exc):
+                    raise
                 existing = _registered_class(cls.__name__)
                 if existing is not None:
                     resolved_classes.append(existing)
-                    continue
-                raise
+                continue
             registered_here.append(cls.__name__)
             resolved_classes.append(cls)
     except Exception:
