@@ -92,6 +92,7 @@ class PSS_PT_panel(bpy.types.Panel):
         if getattr(obj, "use_dynamic_topology_sculpting", False):
             analysis.label(text="Disable Dyntopo before analyzing regions.", icon="ERROR")
         analysis.operator("print_splitter.analyze_geometry", text="Analyze Mesh", icon="VIEWZOOM")
+        analysis.label(text="Fast normal grouping · refine with the brush", icon="INFO")
         self._draw_advanced_toggle(layout, settings)
         if settings.show_advanced_options:
             self._draw_advanced_options(layout, settings, obj, include_geometry=True)
@@ -99,10 +100,10 @@ class PSS_PT_panel(bpy.types.Panel):
     @staticmethod
     def _draw_geometry_segmentation(layout, settings, obj):
         box = layout.box()
-        box.label(text="Central Piece and Regions", icon="MOD_DECIM")
+        box.label(text="Mother Piece and Regions", icon="MOD_DECIM")
         box.prop(settings, "geometry_mother_face_set", text="Mother")
         box.prop(settings, "geometry_target_face_set", text="Part")
-        box.label(text="Center region is selected by default.", icon="INFO")
+        box.label(text="Largest region is selected as Mother by default.", icon="INFO")
         box.operator("print_splitter.start_face_set_merge", text="Merge Face Sets", icon="AUTOMERGE_ON")
         if settings.geometry_target_face_set == settings.geometry_mother_face_set:
             box.label(text="Part must differ from Mother.", icon="ERROR")
@@ -144,8 +145,6 @@ class PSS_PT_panel(bpy.types.Panel):
             box.separator()
             if settings.geometry_partition_method == "SURFACE_FOLDS":
                 box.prop(settings, "geometry_angle_degrees")
-                box.prop(settings, "geometry_feature_scale_percent")
-                box.prop(settings, "geometry_min_region_percent")
             if obj.get(GEOMETRY_SEGMENTATION_KEY):
                 row = box.row(align=True)
                 row.operator("print_splitter.native_faceset_brush", text="Face Set Brush", icon="BRUSH_DATA")

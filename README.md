@@ -4,11 +4,11 @@ An independent Blender add-on for splitting printable parts from a sculpted mesh
 
 ## Compatibility and status
 
-Prototype version **0.7.0**, targeting **Blender 5.3.0 and later**. Geometry analysis and splitting were reviewed on Suzanne in Blender 5.3.0; the on-mesh merge tool was exercised live with click-and-confirm, drag, clear, and cancel. The Manifold connector was confirmed on an adjoining-cube fixture. Sixty analysis parameter combinations were compared: 30 each on low-poly and subdivided Suzanne meshes. Complex user meshes still need inspection because Mask Slice output depends on the source topology.
+Prototype version **0.8.0**, targeting **Blender 5.3.0 and later**. Surface analysis now uses Blender's native normal-based Face Set initializer rather than Python per-face flood fill and repeated region merging. This trades some region accuracy for predictable performance on dense meshes. Complex user meshes still need inspection because Mask Slice output depends on the source topology.
 
 ## Installation
 
-1. Run `python3 package.py` from this directory to build `blender_print_splitter-0.7.0.zip`.
+1. Run `python3 package.py` from this directory to build `blender_print_splitter-0.8.0.zip`.
 2. In Blender, open **Edit > Preferences > Get Extensions > Install from Disk** and select the ZIP.
 3. Enable **Blender Print Splitter**, then open the **Print Splitter** tab in the 3D Viewport sidebar (`N`).
 
@@ -28,20 +28,20 @@ You can also install the `blender_print_splitter` directory as a local add-on.
 ## Alternative workflow: analyze the mesh
 
 1. Choose **Surface Features** or **Disconnected Parts**, then click **Analyze Mesh**.
-2. **Surface Features** finds connected regions from changes in the mesh's surface curvature. Patches below 5% of total surface area are merged into the neighboring region with the widest shared boundary by default. It does not depend on marked sharp edges, seams, or material slots. **Disconnected Parts** creates one Face Set per connected mesh component.
-3. The analyzer preselects the region whose area-weighted center is nearest the mesh bounding-box center as **Mother (Male Pins)**. Change that dropdown if another region should be the base, then choose **Part (Female Socket)** to extract. The mother stays on the remainder; the extracted part gets the matching socket.
+2. **Surface Features** uses Blender's native normal-based Face Set initializer to divide connected surface regions. It does not depend on marked sharp edges, seams, or material slots. **Disconnected Parts** uses Blender's native loose-part initializer. Both avoid the add-on's former Python traversal over every face and edge.
+3. The largest generated Face Set is selected as **Mother** by default. Change that dropdown if another region should stay on the remainder, then choose **Part** to extract.
 4. Click **Merge Face Sets**, then click the source and destination regions and press Enter. Or drag from the source onto the destination to merge immediately. Right-click clears the selection; Esc exits without changing the mesh. The source labels are reassigned to the destination without moving vertices.
 5. If **Create connector after split** is enabled, edit and confirm the connector before splitting the next region. The add-on blocks another split while a connector is unresolved. If the option is disabled, the split completes without connector helpers.
 6. To refine boundaries with Blender's native Draw Face Sets brush, expand **Options**. Face Sets are cleared on both resulting parts; analyze the selected piece again if it needs another automatic split.
 
-The curvature angle and scale, minimum region size, and cleanup controls are in the collapsed **Options** section. Geometry regions are editable proposals: the analyzer can separate clear forms such as ears, eyes, and muzzle on suitable meshes, but it does not recognize semantic labels such as "nose" or "face". Use the native Face Set brush to adjust boundaries before extracting.
+The **Normal Angle** threshold and cleanup controls are in the collapsed **Options** section. A larger angle creates fewer, broader regions; a smaller angle creates more regions. This fast detector is intentionally approximate. Use the native Face Set brush or **Merge Face Sets** to adjust the regions before extracting; the analyzer does not recognize semantic labels such as "nose" or "face".
 
 ## Prototype limitations
 
 - The brush builds its surface from the base mesh and paints geodesically across adjacent faces. Models with complex topology or modifiers need additional validation.
 - Dyntopo must be disabled. Modifiers are temporarily hidden while painting so the brush maps to the base mesh, then restored when the brush finishes or is cancelled.
 - Automatic region merging follows the shortest path over the mesh topology and may not suit every model. Review the painted region before extracting.
-- Geometry segmentation measures curvature from mesh topology and face normals, then coalesces tiny neighboring patches. Meshes with gradual folds or very uneven topology can still need manual edits. The analyzer uses compact mesh buffers rather than a second full BMesh copy, and the curvature scale helps produce useful regions across different mesh densities.
+- Geometry segmentation uses Blender's native normal grouping. It is faster on dense meshes but may leave small regions or combine features that the earlier scale-aware detector separated. Adjust the Normal Angle or edit Face Sets manually.
 - The automatic connector starts at the average of the painted interface vertices; inspect and adjust its shared controller when the boundary is curved or irregular.
 - The optional magnet pockets are paired, centered on the split plane, and placed beside the pin. Check wall thickness and available space before applying them.
 - Mask Slice fills the two interface boundaries with triangulated faces; the result still needs inspection on complex or non-manifold source meshes.

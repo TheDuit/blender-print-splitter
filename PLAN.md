@@ -6,15 +6,16 @@ Build a Sculpt Mode add-on with two independent ways to mark a printable part: p
 
 The add-on is an independent project outside the Imobflow repository. **English is the default language for the UI, messages, and documentation.** The compatibility target is **Blender 5.3.0 and later**.
 
-## Implementation status — v0.7.0
+## Implementation status — v0.8.0
 
 - [x] Keep manual painting and geometry analysis as separate workflows.
-- [x] Generate surface regions directly from mesh curvature and connected topology, then merge small patches into adjacent regions.
-- [x] Compensate for mesh density with a relative curvature scale; use compact mesh buffers instead of a full temporary BMesh.
+- [x] Use Blender's native normal-based Face Set initializer for surface analysis, avoiding repeated Python traversals across dense meshes.
+- [x] Use Blender's native loose-part initializer for disconnected-component analysis; map results to the add-on's region IDs in one linear pass.
+- [x] Sacrifice some boundary accuracy for faster analysis; select the largest generated region as the initial mother and leave refinement to the user.
 - [x] Keep the main panel focused on paint, smooth, analyze, and extract; collapse less common controls under **Options**.
 - [x] Use connected mesh components for the separate **Disconnected Parts** analysis.
 - [x] Let geometry mode select a retained mother region; place male pins on the mother and female sockets on extracted parts.
-- [x] Preselect the mother region whose area-weighted center is closest to the mesh center, while allowing manual override.
+- [x] Preselect the largest region as the mother, while allowing manual override.
 - [x] Embed pins 5 mm into their base by default and validate closed topology plus expected volume changes after each Boolean.
 - [x] Let Manifold try to correct minor Mask Slice topology defects, then validate output and roll back invalid results.
 - [x] Block the next split until the current connector pair is confirmed; restore both backups if a Boolean fails validation.
@@ -23,7 +24,7 @@ The add-on is an independent project outside the Imobflow repository. **English 
 - [x] Add optional paired magnet pockets with editable diameter, depth, and fit clearance beside the connector.
 - [x] Provide region selection, merge-by-relabeling, list refresh, and native Draw Face Sets brush access.
 - [x] Add a Sculpt Mode Face Set merge tool: drag source to destination for immediate merge, or click both and confirm with Enter.
-- [x] Audit 30 angle/feature-scale combinations at each of two Suzanne mesh densities (60 total); use a 5% default region merge threshold to keep broad forms while removing tiny fragments.
+- [x] Replace the scale-aware Python detector and automatic tiny-region merging with Blender's native normal grouping and manual region merging.
 - [x] Exercise 84 click/drag selection-state sequences on the default seven-region result and validate click/Enter, drag, right-click clear, and Esc cancel in the Blender 5.3 UI.
 - [x] Clear generated Face Sets after each successful split so a resulting piece can be analyzed again.
 - [x] Recover from partial Blender registration by removing stale classes and handlers before re-registering.
@@ -37,9 +38,9 @@ The add-on is an independent project outside the Imobflow repository. **English 
 
 1. Select a mesh object and click **Start New Part**.
 2. On the first split, preserve the original object's name and archive it in a hidden, unselectable collection. Create exactly one independent working copy. If the selected mesh is already marked as a division, process it in place without copying it.
-3. Choose whether to create a connector after the split. Choose one marking workflow: paint one region with the Print Splitter brush, or analyze surface curvature / disconnected mesh components. The geometry workflow does not depend on material slots or marked seams/edges.
+3. Choose whether to create a connector after the split. Choose one marking workflow: paint one region with the Print Splitter brush, or analyze approximate surface-normal regions / disconnected mesh components. The geometry workflow does not depend on material slots or marked seams/edges.
 4. In geometry mode, click **Merge Face Sets**, select a source and destination region then press Enter, or drag source to destination to merge immediately. Right-click clears the selection; Esc cancels. Use Blender's native **Draw Face Sets** brush for manual boundary edits. The Print Splitter brush and **Smooth Face Sets** remain part of the separate manual flow.
-5. Detect disconnected target regions. Ignore small components relative to the largest and optionally merge nearby target islands along the mesh surface.
+5. In the manual paint workflow, ignore small painted islands and optionally bridge nearby target regions along the mesh surface. Geometry analysis uses Blender's fast approximate normal grouping; merge or repaint generated regions manually if needed.
 6. Convert the selected Face Set to a mask and use Blender's Mask Slice with a new object and hole filling, producing complementary parts with matching capped boundaries. Clear Face Sets on both results; run a fresh analysis before a later geometry-based split. Mark both parts as divisions.
 7. If enabled, create an editable connector preview at the interface after the split. Choose a cylinder or tapered square key; embed the connector 5 mm into its base by default. Optionally add matching magnet pockets on both halves. Keep position, rotation, scale, and dimensions adjustable without running Boolean operations. Apply the connector and pockets only after explicit confirmation.
 
@@ -55,8 +56,8 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - Reuse an already divided mesh directly, without making another copy.
 - Clear old Face Sets and masks before each new interaction.
 - Provide a custom Face Set paint tool that assigns one ID and color across strokes without Ctrl.
-- Offer a separate geometry-analysis workflow using mesh topology and face-normal changes to identify surface regions, plus disconnected mesh components. Merge tiny curvature patches into their strongest neighboring region; leave larger regions editable.
-- Let the user choose a retained central mother Face Set and extract other generated regions one at a time. Put the male pin on the mother and the female socket on each extracted piece; require connector confirmation before the next split.
+- Offer a separate geometry-analysis workflow using Blender's native face-normal grouping to identify approximate surface regions, plus native disconnected-part detection. Users can merge and edit generated regions manually.
+- Let the user choose a retained mother Face Set; select the largest generated region by default and extract other regions one at a time. Put the male pin on the mother and the female socket on each extracted piece; require connector confirmation before the next split.
 - Let users turn connector creation off before painting or analyzing; a split without a connector creates no pending pair and does not block the next split.
 - Let users choose the target region, merge one Face Set into another by relabeling faces, and activate Blender's native Draw Face Sets brush for manual cleanup in geometry mode.
 - Let users merge regions by selecting them directly on the mesh: drag source onto destination to confirm, or click both and press Enter.
@@ -102,7 +103,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 
 1. Confirm one-time copying, original-name preservation, and hidden/unselectable archival.
 2. Confirm that every manual paint stroke uses one Face Set ID without Ctrl.
-3. Confirm that the geometry analyzer creates connected curvature regions across multiple mesh densities and that disconnected-part mode separates loose components.
+3. Confirm that native normal analysis and disconnected-part mode generate usable Face Sets on representative meshes, including dense meshes; measure analysis time and review the accuracy tradeoff.
 4. Confirm Face Set merge relabels faces without changing mesh geometry and that the native Draw Face Sets brush edits generated labels.
 5. Confirm generated Face Sets are cleared after a split and a later split analyzes the current mesh again.
 6. Test Face Set-to-mask conversion and `paint_mask_slice(new_object=True, fill_holes=True)`; inspect matching cap topology and mask thresholds.
@@ -161,7 +162,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - Internal metadata identifies divisions even after users rename the objects; the name prefix is only a visual hint.
 - Each interaction turns its input mesh into the remainder and creates exactly one extracted part, with connector creation controlled by the pre-paint/pre-analysis checkbox.
 - Manual mode clears Face Sets and paints one target set per interaction.
-- Geometry mode partitions the selected mesh from geometric curvature or disconnected components, without using marked seams, sharp edges, or material data.
+- Geometry mode creates approximate regions from face normals or disconnected components, without using marked seams, sharp edges, or material data.
 - Geometry mode exposes the generated regions for target selection, merge-by-relabeling, and native Draw Face Sets brush cleanup.
 - Geometry mode has a dedicated modal merge tool with on-mesh source/target selection and both drag-to-merge and Enter-to-confirm interaction paths.
 - The modal merge tool uses the base-mesh Face Set data, shows the selected and hovered region IDs in the status bar, and restores modifier visibility when it exits.
@@ -170,7 +171,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - Face Sets are temporary: every successful split clears both results, and the next geometry-based split analyzes its selected input again.
 - Every brush stroke uses the same Face Set ID and color without pressing Ctrl.
 - Face Set boundary smoothing changes labels only and leaves mesh vertex positions unchanged.
-- Small components are ignored according to the configured relative threshold; nearby large regions are joined along a valid surface path.
+- In manual paint mode, small painted islands can be ignored and nearby target regions can be joined along a valid surface path. Geometry-analysis regions can be merged and refined by the user.
 - The selected region becomes a filled mask and is extracted as a new object.
 - The archived original and the remaining geometry are preserved.
 - With connector creation enabled, an editable connector preview is created at the split interface. Users can choose a cylinder or tapered square key and edit its position, rotation, scale, and fit without running Booleans.
@@ -187,7 +188,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - The final internal metadata schema and versioning strategy for division lineage.
 - Whether mating-surface clearance is symmetric or applied to one half only.
 - Whether later versions should place multiple connector pairs automatically along long interfaces.
-- The cleanup percentage and maximum geodesic gap, to be tuned with real models.
+- The paint cleanup percentage and maximum geodesic gap, to be tuned with real models.
 
 ## Technical risks to validate early
 
@@ -196,8 +197,8 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - Mask Slice's hole filling triangulates the split boundary. Inspect cap quality and matching between both halves on complex, concave, and non-manifold meshes.
 - Mask Slice uses temporary mesh copies while splitting; measure peak memory on dense models even though repeated splits do not leave extra full-mesh clones in the scene.
 - Island filtering and gap filling can merge regions that the user intended to keep separate; use conservative thresholds and a reviewable preview.
-- Geometry segmentation depends on mesh shape and curvature settings; smooth meshes without clear folds can produce one broad region or several patches. Users can adjust the angle and scale, merge regions, and refine boundaries with the native brush. The analyzer does not semantically identify named features.
-- The analyzer's default mother is the area-weighted region center closest to the mesh bounding-box center; asymmetrical models may need a different mother chosen in the panel.
+- Geometry segmentation uses Blender's native face-normal grouping and is intentionally approximate. It can combine nearby forms or create extra regions on noisy surfaces; users can adjust the normal angle, merge regions, and refine boundaries with the native brush. The analyzer does not semantically identify named features.
+- The analyzer selects the largest region as the default mother; asymmetrical models may need a different mother chosen in the panel.
 - Manifold can repair some small topology defects, but more severe non-manifold inputs may still fail. Validate closed output, expected volume changes, and restore both original meshes if a Boolean result is invalid.
 - Connectors may not fit on highly curved, narrow, or small surfaces; detect and explain such cases.
 - Magnet pockets can weaken thin walls or collide with the connector on small interfaces; inspect the preview and adjust dimensions before applying.

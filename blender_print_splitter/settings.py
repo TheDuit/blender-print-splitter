@@ -124,40 +124,24 @@ class PSS_Settings(bpy.types.PropertyGroup):
     )
     geometry_partition_method: bpy.props.EnumProperty(
         name="Analysis Method",
-        description="Choose whether to detect surface features or disconnected mesh components",
+        description="Use Blender's native normal grouping or disconnected-part detection",
         items=(
             (
                 "SURFACE_FOLDS",
                 "Surface Features",
-                "Create regions from geometric folds and merge tiny patches into their neighbors",
+                "Use Blender's fast native normal grouping to create approximate surface regions",
             ),
             ("LOOSE_PARTS", "Disconnected Parts", "Create one region for each disconnected mesh component"),
         ),
         default="SURFACE_FOLDS",
     )
     geometry_angle_degrees: bpy.props.FloatProperty(
-        name="Feature Angle (°)",
-        default=30.0,
+        name="Normal Angle (°)",
+        default=60.0,
         min=5.0,
         max=89.0,
         precision=1,
-        description="Normal change measured across the curvature scale; lower values create more regions",
-    )
-    geometry_feature_scale_percent: bpy.props.FloatProperty(
-        name="Curvature Scale (% of Size)",
-        default=10.0,
-        min=0.25,
-        max=25.0,
-        precision=1,
-        description="Surface distance over which the feature angle is measured; higher values create more detail",
-    )
-    geometry_min_region_percent: bpy.props.FloatProperty(
-        name="Merge Regions Below (%)",
-        default=5.0,
-        min=0.0,
-        max=25.0,
-        precision=1,
-        description="Merge small surface patches into the adjacent region with the longest shared boundary",
+        description="Fast normal threshold; larger angles create fewer, broader regions",
     )
     geometry_target_face_set: bpy.props.EnumProperty(
         name="Region to Extract",
@@ -168,7 +152,7 @@ class PSS_Settings(bpy.types.PropertyGroup):
     )
     geometry_mother_face_set: bpy.props.EnumProperty(
         name="Mother Region",
-        description="Keep this central region on the remainder and add male pins to it",
+        description="Keep this region on the remainder and attach the connector to it; largest is selected by default",
         items=_geometry_face_set_items,
         update=_set_geometry_mother,
         options={"SKIP_SAVE"},

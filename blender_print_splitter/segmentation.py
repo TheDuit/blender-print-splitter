@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from array import array
-from collections import defaultdict
+from collections import Counter
 import json
 import math
 
 import bpy
 from bpy_extras import view3d_utils
-from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 from .registration import register_classes, unregister_classes
 
@@ -39,253 +38,47 @@ def _read_values(attribute):
     return values
 
 
-def _write_summary(obj):
-    obj[GEOMETRY_FACE_SET_SUMMARY_KEY] = json.dumps(face_set_counts(obj))
+def _write_summary(obj, counts=None):
+    counts = counts if counts is not None else face_set_counts(obj)
+    obj[GEOMETRY_FACE_SET_SUMMARY_KEY] = json.dumps(counts)
 
 
-def _world_face_area(polygon, matrix, normal_matrix, determinant):
-    transformed_normal = normal_matrix @ polygon.normal
-    normal_scale = transformed_normal.length
-    if normal_scale < 1e-12:
-        return max(float(polygon.area), 0.0)
-    return max(float(polygon.area), 0.0) * determinant * normal_scale
-
-
-def _face_region_labels(obj, method, angle_degrees, feature_scale_percent, minimum_region_percent):
-    """Build connected regions from surface folds, without relying on edge flags."""
-    mesh = obj.data
-    face_count = len(mesh.polygons)
-    edge_count = len(mesh.edges)
-    labels = array("i", [-1]) * face_count
-    edge_faces = array("i", [-1]) * (edge_count * 2)
-    loop_edges = array("i", [0]) * len(mesh.loops)
-    mesh.loops.foreach_get("edge_index", loop_edges)
-    if method == "SURFACE_FOLDS":
-        mesh.update()
-        normals = array("f", [0.0]) * (face_count * 3)
-        mesh.polygons.foreach_get("normal", normals)
-        try:
-            normal_matrix = obj.matrix_world.to_3x3().inverted().transposed()
-        except ValueError:
-            normal_matrix = Matrix.Identity(3)
-        for face_index in range(face_count):
-            offset = face_index * 3
-            x = normals[offset]
-            y = normals[offset + 1]
-            z = normals[offset + 2]
-            nx = normal_matrix[0][0] * x + normal_matrix[0][1] * y + normal_matrix[0][2] * z
-            ny = normal_matrix[1][0] * x + normal_matrix[1][1] * y + normal_matrix[1][2] * z
-            nz = normal_matrix[2][0] * x + normal_matrix[2][1] * y + normal_matrix[2][2] * z
-            length = math.sqrt(nx * nx + ny * ny + nz * nz)
-            if length > 1e-12:
-                normals[offset] = nx / length
-                normals[offset + 1] = ny / length
-                normals[offset + 2] = nz / length
-        bounds_min = [math.inf, math.inf, math.inf]
-        bounds_max = [-math.inf, -math.inf, -math.inf]
-        for vertex in mesh.vertices:
-            for axis in range(3):
-                coordinate = vertex.co[axis]
-                bounds_min[axis] = min(bounds_min[axis], coordinate)
-                bounds_max[axis] = max(bounds_max[axis], coordinate)
-        diagonal = math.sqrt(sum((bounds_max[axis] - bounds_min[axis]) ** 2 for axis in range(3)))
-        feature_scale = max(diagonal * feature_scale_percent / 100.0, 1e-12)
-        edge_lengths = array("f", [0.0]) * edge_count
-        for edge in mesh.edges:
-            first, second = edge.vertices
-            edge_lengths[edge.index] = (mesh.vertices[first].co - mesh.vertices[second].co).length
-        angle_per_scale = math.radians(angle_degrees) / feature_scale
-    else:
-        normals = None
-        edge_lengths = None
-        angle_per_scale = 0.0
-
-    for polygon in mesh.polygons:
-        face_index = polygon.index
-        start = polygon.loop_start
-        end = start + polygon.loop_total
-        for loop_index in range(start, end):
-            edge_index = loop_edges[loop_index]
-            offset = edge_index * 2
-            if edge_faces[offset] < 0:
-                edge_faces[offset] = face_index
-            elif edge_faces[offset + 1] < 0:
-                edge_faces[offset + 1] = face_index
-
-    region_areas = array("d")
-    region_count = 0
-    for seed in range(face_count):
-        if labels[seed] >= 0:
-            continue
-        labels[seed] = region_count
-        stack = [seed]
-        area = 0.0
-        while stack:
-            face_index = stack.pop()
-            polygon = mesh.polygons[face_index]
-            area += max(float(polygon.area), 0.0)
-            start = polygon.loop_start
-            end = start + polygon.loop_total
-            for loop_index in range(start, end):
-                edge_index = loop_edges[loop_index]
-                offset = edge_index * 2
-                first = edge_faces[offset]
-                second = edge_faces[offset + 1]
-                if second < 0:
-                    continue
-                other_index = second if first == face_index else first
-                if other_index < 0 or labels[other_index] >= 0:
-                    continue
-                if normals is not None:
-                    normal_offset = face_index * 3
-                    other_offset = other_index * 3
-                    dot = sum(
-                        normals[normal_offset + axis] * normals[other_offset + axis]
-                        for axis in range(3)
-                    )
-                    edge_angle_limit = min(
-                        math.radians(min(angle_degrees * 1.5, 89.0)),
-                        angle_per_scale * edge_lengths[edge_index],
-                    )
-                    if dot < math.cos(edge_angle_limit):
-                        continue
-                labels[other_index] = region_count
-                stack.append(other_index)
-        region_areas.append(area)
-        region_count += 1
-
-    if method == "SURFACE_FOLDS" and region_count > 1 and minimum_region_percent > 0.0:
-        minimum_area = sum(region_areas) * (minimum_region_percent / 100.0)
-        parents = array("i", range(region_count))
-        region_heads = array("i", [-1]) * region_count
-        region_tails = array("i", [-1]) * region_count
-        next_faces = array("i", [-1]) * face_count
-        for face_index, region_id in enumerate(labels):
-            if region_heads[region_id] < 0:
-                region_heads[region_id] = face_index
-            else:
-                next_faces[region_tails[region_id]] = face_index
-            region_tails[region_id] = face_index
-
-        def find(region_id):
-            while parents[region_id] != region_id:
-                parents[region_id] = parents[parents[region_id]]
-                region_id = parents[region_id]
-            return region_id
-
-        for source in range(region_count):
-            source = find(source)
-            while region_areas[source] < minimum_area:
-                neighbor_scores = defaultdict(float)
-                face_index = region_heads[source]
-                while face_index >= 0:
-                    polygon = mesh.polygons[face_index]
-                    start = polygon.loop_start
-                    end = start + polygon.loop_total
-                    for loop_index in range(start, end):
-                        edge_offset = loop_edges[loop_index] * 2
-                        first = edge_faces[edge_offset]
-                        second = edge_faces[edge_offset + 1]
-                        if second < 0:
-                            continue
-                        other_face = second if first == face_index else first
-                        destination = find(labels[other_face])
-                        if destination != source:
-                            neighbor_scores[destination] += edge_lengths[loop_edges[loop_index]]
-                    face_index = next_faces[face_index]
-                if not neighbor_scores:
-                    break
-                destination = max(
-                    neighbor_scores,
-                    key=lambda region_id: (neighbor_scores[region_id], region_areas[region_id]),
-                )
-                parents[source] = destination
-                region_areas[destination] += region_areas[source]
-                if region_heads[destination] < 0:
-                    region_heads[destination] = region_heads[source]
-                elif region_heads[source] >= 0:
-                    next_faces[region_tails[destination]] = region_heads[source]
-                if region_tails[source] >= 0:
-                    region_tails[destination] = region_tails[source]
-                region_heads[source] = -1
-                region_tails[source] = -1
-                source = find(destination)
-
-        remapped_regions = {}
-        next_region = 0
-        for face_index, region_id in enumerate(labels):
-            root = find(region_id)
-            if root not in remapped_regions:
-                remapped_regions[root] = next_region
-                next_region += 1
-            labels[face_index] = remapped_regions[root]
-        region_count = next_region
-
-    return labels, region_count
-
-
-def analyze_geometry(
-    obj,
-    method,
-    angle_degrees,
-    feature_scale_percent=10.0,
-    minimum_region_percent=3.0,
-):
-    """Generate geometry-based Face Sets and merge tiny fold patches into neighbors."""
+def analyze_geometry(obj, method, angle_degrees):
+    """Use Blender's native Face Set initializer to keep analysis fast on dense meshes."""
     if not is_mesh_object(obj) or not obj.data.polygons:
         raise ValueError("Select a mesh with faces to analyze.")
     if method not in {"SURFACE_FOLDS", "LOOSE_PARTS"}:
         raise ValueError("Choose a supported geometry analysis method.")
+    if bpy.context.mode != "SCULPT" or bpy.context.active_object != obj:
+        raise ValueError("Make the mesh active in Sculpt Mode before analyzing it.")
+
     obj.pop(GEOMETRY_SEGMENTATION_KEY, None)
     obj.pop(GEOMETRY_FACE_SET_SUMMARY_KEY, None)
     obj.pop(GEOMETRY_MOTHER_FACE_SET_KEY, None)
     reset_face_sets(obj.data)
+    attribute = ensure_face_sets(obj.data)
 
-    labels, region_count = _face_region_labels(
-        obj,
-        method,
-        angle_degrees,
-        feature_scale_percent,
-        minimum_region_percent,
-    )
+    native_mode = "NORMALS" if method == "SURFACE_FOLDS" else "LOOSE_PARTS"
+    threshold = math.cos(math.radians(min(max(float(angle_degrees), 5.0), 89.0)))
+    try:
+        result = bpy.ops.sculpt.face_sets_init(mode=native_mode, threshold=threshold)
+    except RuntimeError as exc:
+        raise RuntimeError("Blender could not initialize Face Sets for this mesh.") from exc
+    if "FINISHED" not in result:
+        raise RuntimeError("Blender could not initialize Face Sets for this mesh.")
 
     attribute = ensure_face_sets(obj.data)
-    values = array("i", [0]) * len(attribute.data)
-    matrix = obj.matrix_world.to_3x3()
-    determinant = abs(matrix.determinant())
-    if determinant < 1e-12:
-        matrix = Matrix.Identity(3)
-        determinant = 1.0
-    try:
-        normal_matrix = matrix.inverted().transposed()
-    except ValueError:
-        normal_matrix = Matrix.Identity(3)
-        determinant = 1.0
-
-    counts = {}
-    areas = {}
-    remapped_ids = {}
-    for index, polygon in enumerate(obj.data.polygons):
-        region_id = int(labels[index])
-        new_id = remapped_ids.get(region_id)
-        if new_id is None:
-            new_id = TARGET_FACE_SET + len(remapped_ids)
-            remapped_ids[region_id] = new_id
-        values[index] = new_id
-        counts[new_id] = counts.get(new_id, 0) + 1
-        areas[new_id] = areas.get(new_id, 0.0) + _world_face_area(
-            polygon,
-            matrix,
-            normal_matrix,
-            determinant,
-        )
+    raw_values = _read_values(attribute)
+    values = array("i", (int(value) + 1 for value in raw_values))
+    counts = Counter(values)
     if values:
         attribute.data.foreach_set("value", values)
     obj.data.update()
 
-    largest_id = max(areas, key=areas.get)
+    largest_id = max(counts, key=counts.get)
     obj[FACE_SET_KEY] = largest_id
-    _write_summary(obj)
+    counts = dict(counts)
+    _write_summary(obj, counts)
     obj[GEOMETRY_SEGMENTATION_KEY] = method
     obj.update_tag(refresh={"DATA"})
     return counts, largest_id
@@ -296,61 +89,11 @@ def face_set_counts(obj):
     if attribute is None or attribute.domain != "FACE" or attribute.data_type != "INT":
         return {}
     values = _read_values(attribute)
-    counts = {}
-    for value in values:
-        value = int(value)
-        if value >= TARGET_FACE_SET:
-            counts[value] = counts.get(value, 0) + 1
-    return counts
-
-
-def _most_central_face_set_id(obj, candidates=None):
-    """Pick the generated region whose area-weighted center is nearest the mesh center."""
-    mesh = obj.data
-    attribute = mesh.attributes.get(FACE_SET_ATTRIBUTE)
-    if attribute is None or not mesh.vertices or not mesh.polygons:
-        return None
-    values = _read_values(attribute)
-    candidate_ids = set(candidates or (int(value) for value in values if value >= TARGET_FACE_SET))
-    if not candidate_ids:
-        return None
-
-    matrix = obj.matrix_world
-    linear = matrix.to_3x3()
-    minimum = Vector((math.inf, math.inf, math.inf))
-    maximum = Vector((-math.inf, -math.inf, -math.inf))
-    for vertex in mesh.vertices:
-        world_vertex = matrix @ vertex.co
-        for axis in range(3):
-            minimum[axis] = min(minimum[axis], world_vertex[axis])
-            maximum[axis] = max(maximum[axis], world_vertex[axis])
-    mesh_center = (minimum + maximum) * 0.5
-    try:
-        normal_matrix = linear.inverted().transposed()
-        determinant = abs(linear.determinant())
-    except ValueError:
-        normal_matrix = Matrix.Identity(3)
-        determinant = 1.0
-
-    weighted_centers = {face_set_id: Vector((0.0, 0.0, 0.0)) for face_set_id in candidate_ids}
-    region_areas = {face_set_id: 0.0 for face_set_id in candidate_ids}
-    for polygon, face_set_id in zip(mesh.polygons, values):
-        face_set_id = int(face_set_id)
-        if face_set_id not in candidate_ids:
-            continue
-        area = _world_face_area(polygon, linear, normal_matrix, determinant)
-        if area <= 1e-12:
-            area = 1.0
-        weighted_centers[face_set_id] += matrix @ polygon.center * area
-        region_areas[face_set_id] += area
-
-    ranked = []
-    for face_set_id, total_area in region_areas.items():
-        if total_area <= 0.0:
-            continue
-        center = weighted_centers[face_set_id] / total_area
-        ranked.append(((center - mesh_center).length_squared, -total_area, face_set_id))
-    return min(ranked)[2] if ranked else None
+    return {
+        int(face_set_id): count
+        for face_set_id, count in Counter(values).items()
+        if face_set_id >= TARGET_FACE_SET
+    }
 
 
 def merge_face_sets(obj, source_id, destination_id):
@@ -643,7 +386,7 @@ class PSS_OT_start_face_set_merge(bpy.types.Operator):
 class PSS_OT_analyze_geometry(bpy.types.Operator):
     bl_idname = "print_splitter.analyze_geometry"
     bl_label = "Analyze Geometry"
-    bl_description = "Create temporary Face Sets from geometric curvature or disconnected parts"
+    bl_description = "Use Blender's fast native normal grouping or disconnected-part detection"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -663,26 +406,23 @@ class PSS_OT_analyze_geometry(bpy.types.Operator):
                 context.active_object,
                 settings.geometry_partition_method,
                 settings.geometry_angle_degrees,
-                settings.geometry_feature_scale_percent,
-                settings.geometry_min_region_percent,
             )
         except (RuntimeError, ValueError) as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
         obj = context.active_object
-        central_id = _most_central_face_set_id(obj, counts) or largest_id
-        settings.geometry_mother_face_set = f"FACE_SET_{central_id}"
+        settings.geometry_mother_face_set = f"FACE_SET_{largest_id}"
         alternate = max(
-            (face_id for face_id in counts if face_id != central_id),
+            (face_id for face_id in counts if face_id != largest_id),
             key=lambda face_id: counts[face_id],
-            default=central_id,
+            default=largest_id,
         )
         settings.geometry_target_face_set = f"FACE_SET_{alternate}"
         if obj.get(PART_ID_KEY):
             obj[MOTHER_PART_ID_KEY] = obj[PART_ID_KEY]
         self.report(
             {"INFO"},
-            f"Generated {len(counts)} editable regions; Face Set {central_id} is the initial mother.",
+            f"Generated {len(counts)} regions; largest Face Set {largest_id} is the initial mother.",
         )
         return {"FINISHED"}
 
