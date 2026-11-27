@@ -4,11 +4,11 @@ An independent Blender add-on for splitting printable parts from a sculpted mesh
 
 ## Compatibility and status
 
-Prototype version **0.8.0**, targeting **Blender 5.3.0 and later**. Surface analysis now uses Blender's native normal-based Face Set initializer rather than Python per-face flood fill and repeated region merging. This trades some region accuracy for predictable performance on dense meshes. Complex user meshes still need inspection because Mask Slice output depends on the source topology.
+Prototype version **0.9.0**, targeting **Blender 5.3.0 and later**. Surface analysis uses Blender's native normal-based Face Set initializer for faster processing on dense meshes. Manual painting follows Blender's sculpt brush conventions: the same Face Set is painted with each stroke, `E` switches to erase, `P` switches back to paint, and `F`-drag changes brush size. Complex user meshes still need inspection because Mask Slice output depends on the source topology.
 
 ## Installation
 
-1. Run `python3 package.py` from this directory to build `blender_print_splitter-0.8.0.zip`.
+1. Run `python3 package.py` from this directory to build `blender_print_splitter-0.9.0.zip`.
 2. In Blender, open **Edit > Preferences > Get Extensions > Install from Disk** and select the ZIP.
 3. Enable **Blender Print Splitter**, then open the **Print Splitter** tab in the 3D Viewport sidebar (`N`).
 
@@ -17,8 +17,8 @@ You can also install the `blender_print_splitter` directory as a local add-on.
 ## Basic workflow
 
 1. Select the original mesh and click **Start New Part**. The original keeps its name and is moved to a hidden, unselectable collection. The add-on creates one independent working copy.
-2. Before painting or analyzing, choose **Create connector after split** in the panel. Turn it off to separate parts without creating connector helpers or requiring connector confirmation. In Sculpt Mode, click **Paint Region**. Left-drag paints; right-drag erases. Scroll to resize the brush, or Shift-scroll for larger steps. All strokes use the same Face Set ID and color. Press Enter to finish or Esc to cancel.
-3. Optionally click **Smooth Boundary** to relax Face Set labels without moving mesh vertices.
+2. Before painting or analyzing, choose **Add connector after split** in the panel. Turn it off to separate parts without creating connector helpers or requiring connector confirmation. In Sculpt Mode, click **Paint** or **Erase**, then left-drag on the mesh. Press `E` to erase, `P` to paint again, and hold `F` while dragging to resize. Right/middle mouse and the wheel remain available for viewport navigation. All paint strokes use the same Face Set ID and color. Press Enter to finish or Esc to cancel.
+3. Optionally click **Smooth Face Sets** to relax Face Set labels without moving mesh vertices.
 4. Click **Extract Part**. The add-on filters small islands, attempts to join nearby regions along the mesh surface, converts the Face Set to a mask, and uses Blender's Mask Slice to create complementary parts with filled interface boundaries. Less common controls are grouped under **Options**.
 5. A male connector is embedded 5 mm into its target by default and reaches across the interface. Choose a cylinder or a tapered square key, then adjust its size, reach, embed depth, clearance, position, rotation, and scale. No Boolean runs during preview.
 6. While editing the connector, optionally enable **Add Magnet Pockets** and set magnet diameter, depth, and fit clearance. The preview places a matching pocket in each half, beside the connector. The pockets are cut when the connector is applied.

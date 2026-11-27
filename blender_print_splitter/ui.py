@@ -69,7 +69,7 @@ class PSS_PT_panel(bpy.types.Panel):
         layout.prop(
             settings,
             "create_connector_after_split",
-            text="Create connector after split",
+            text="Add connector after split",
             icon="MOD_BOOLEAN",
         )
 
@@ -78,21 +78,28 @@ class PSS_PT_panel(bpy.types.Panel):
             return
 
         manual = layout.box()
-        manual.label(text="Paint one region", icon="BRUSH_DATA")
+        manual.label(text="1. Mark a part", icon="BRUSH_DATA")
         row = manual.row(align=True)
-        row.operator("print_splitter.paint_faceset", text="Paint Region", icon="BRUSH_DATA")
-        smooth = row.operator("print_splitter.smooth_faceset", text="Smooth Boundary", icon="MOD_SMOOTH")
+        paint = row.operator("print_splitter.paint_faceset", text="Paint", icon="BRUSH_DATA")
+        paint.action = "PAINT"
+        erase = row.operator("print_splitter.paint_faceset", text="Erase", icon="BRUSH_DATA")
+        erase.action = "ERASE"
+        manual.prop(settings, "brush_radius_px", text="Brush Size")
+        smooth = manual.operator("print_splitter.smooth_faceset", text="Smooth Face Sets", icon="MOD_SMOOTH")
         smooth.iterations = settings.face_set_smooth_iterations
-        manual.label(text="Left-drag paints · right-drag erases · wheel changes brush size", icon="INFO")
-        manual.operator("print_splitter.extract_part", text="Extract Part", icon="MOD_BOOLEAN")
+        manual.label(text="Left-drag paints · E erases · P paints · F-drag resizes", icon="INFO")
 
         analysis = layout.box()
-        analysis.label(text="Or analyze the surface", icon="MOD_DECIM")
-        analysis.prop(settings, "geometry_partition_method", text="Method")
+        analysis.label(text="Or detect regions automatically", icon="MOD_DECIM")
+        row = analysis.row(align=True)
+        row.prop(settings, "geometry_partition_method", text="")
+        row.operator("print_splitter.analyze_geometry", text="Detect", icon="VIEWZOOM")
         if getattr(obj, "use_dynamic_topology_sculpting", False):
             analysis.label(text="Disable Dyntopo before analyzing regions.", icon="ERROR")
-        analysis.operator("print_splitter.analyze_geometry", text="Analyze Mesh", icon="VIEWZOOM")
-        analysis.label(text="Fast normal grouping · refine with the brush", icon="INFO")
+        analysis.label(text="Review, merge, or refine detected regions before extracting.", icon="INFO")
+        split_box = layout.box()
+        split_box.label(text="2. Extract the marked part", icon="MOD_BOOLEAN")
+        split_box.operator("print_splitter.extract_part", text="Extract Part", icon="MOD_BOOLEAN")
         self._draw_advanced_toggle(layout, settings)
         if settings.show_advanced_options:
             self._draw_advanced_options(layout, settings, obj, include_geometry=True)
@@ -100,22 +107,25 @@ class PSS_PT_panel(bpy.types.Panel):
     @staticmethod
     def _draw_geometry_segmentation(layout, settings, obj):
         box = layout.box()
-        box.label(text="Mother Piece and Regions", icon="MOD_DECIM")
+        box.label(text="1. Choose the part to extract", icon="MOD_DECIM")
         box.prop(settings, "geometry_mother_face_set", text="Mother")
         box.prop(settings, "geometry_target_face_set", text="Part")
-        box.label(text="Largest region is selected as Mother by default.", icon="INFO")
-        box.operator("print_splitter.start_face_set_merge", text="Merge Face Sets", icon="AUTOMERGE_ON")
+        row = box.row(align=True)
+        row.operator("print_splitter.start_face_set_merge", text="Merge Regions", icon="AUTOMERGE_ON")
+        row.operator("print_splitter.native_faceset_brush", text="Edit Boundaries", icon="BRUSH_DATA")
         if settings.geometry_target_face_set == settings.geometry_mother_face_set:
             box.label(text="Part must differ from Mother.", icon="ERROR")
-        else:
-            box.operator("print_splitter.extract_part", text="Extract Part", icon="MOD_BOOLEAN")
-        box.label(text="Drag merge · 2 clicks + Enter", icon="INFO")
+        box.label(text="Drag two regions together or click both and press Enter.", icon="INFO")
 
         row = layout.row(align=True)
         row.prop(settings, "geometry_partition_method", text="")
-        row.operator("print_splitter.analyze_geometry", text="Reanalyze", icon="FILE_REFRESH")
+        row.operator("print_splitter.analyze_geometry", text="Detect Again", icon="FILE_REFRESH")
         if getattr(obj, "use_dynamic_topology_sculpting", False):
             layout.label(text="Disable Dyntopo before editing generated regions.", icon="ERROR")
+        split_box = layout.box()
+        split_box.label(text="2. Extract the selected part", icon="MOD_BOOLEAN")
+        if settings.geometry_target_face_set != settings.geometry_mother_face_set:
+            split_box.operator("print_splitter.extract_part", text="Extract Part", icon="MOD_BOOLEAN")
         PSS_PT_panel._draw_advanced_toggle(layout, settings)
         if settings.show_advanced_options:
             PSS_PT_panel._draw_advanced_options(layout, settings, obj, include_geometry=True)
@@ -135,7 +145,6 @@ class PSS_PT_panel(bpy.types.Panel):
     def _draw_advanced_options(layout, settings, obj, include_geometry=False):
         box = layout.box()
         box.label(text="Advanced Options", icon="PREFERENCES")
-        box.prop(settings, "brush_radius_px")
         box.prop(settings, "face_set_smooth_iterations")
         box.separator()
         box.prop(settings, "small_island_percent")
@@ -146,10 +155,8 @@ class PSS_PT_panel(bpy.types.Panel):
             if settings.geometry_partition_method == "SURFACE_FOLDS":
                 box.prop(settings, "geometry_angle_degrees")
             if obj.get(GEOMETRY_SEGMENTATION_KEY):
-                row = box.row(align=True)
-                row.operator("print_splitter.native_faceset_brush", text="Face Set Brush", icon="BRUSH_DATA")
-                row.operator("print_splitter.refresh_geometry_regions", text="Refresh", icon="FILE_REFRESH")
-                box.operator("print_splitter.manual_faceset_mode", text="Switch to Manual Paint", icon="BRUSH_DATA")
+                box.operator("print_splitter.refresh_geometry_regions", text="Refresh Regions", icon="FILE_REFRESH")
+                box.operator("print_splitter.manual_faceset_mode", text="Clear Regions and Paint Manually", icon="BRUSH_DATA")
 
     @staticmethod
     def _draw_connector_controls(layout, settings, obj, pair_id=None):

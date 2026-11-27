@@ -27,6 +27,13 @@ def _refresh_connectors(_self, context):
         pass
 
 
+def _sync_brush_radius(self, context):
+    sculpt = getattr(getattr(context, "tool_settings", None), "sculpt", None)
+    brush = getattr(sculpt, "brush", None)
+    if brush is not None:
+        brush.size = self.brush_radius_px
+
+
 def _geometry_face_set_items(_self, context):
     obj = context.active_object if context else None
     try:
@@ -85,11 +92,12 @@ def _set_geometry_mother(self, context):
 
 class PSS_Settings(bpy.types.PropertyGroup):
     brush_radius_px: bpy.props.IntProperty(
-        name="Brush Radius",
-        default=36,
-        min=4,
-        max=300,
+        name="Brush Size",
+        default=70,
+        min=1,
+        max=10000,
         description="Paint brush radius in viewport pixels",
+        update=_sync_brush_radius,
     )
     small_island_percent: bpy.props.FloatProperty(
         name="Ignore Islands Below (%)",

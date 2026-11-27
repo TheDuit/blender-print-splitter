@@ -6,13 +6,16 @@ Build a Sculpt Mode add-on with two independent ways to mark a printable part: p
 
 The add-on is an independent project outside the Imobflow repository. **English is the default language for the UI, messages, and documentation.** The compatibility target is **Blender 5.3.0 and later**.
 
-## Implementation status — v0.8.0
+## Implementation status — v0.9.0
 
 - [x] Keep manual painting and geometry analysis as separate workflows.
 - [x] Use Blender's native normal-based Face Set initializer for surface analysis, avoiding repeated Python traversals across dense meshes.
 - [x] Use Blender's native loose-part initializer for disconnected-component analysis; map results to the add-on's region IDs in one linear pass.
 - [x] Sacrifice some boundary accuracy for faster analysis; select the largest generated region as the initial mother and leave refinement to the user.
 - [x] Keep the main panel focused on paint, smooth, analyze, and extract; collapse less common controls under **Options**.
+- [x] Simplify the manual workflow into numbered mark and extract steps, with separate Paint and Erase buttons.
+- [x] Use Blender's sculpt brush cursor and brush size, support F-drag resizing, and leave right/middle mouse navigation and wheel zoom available.
+- [x] Make left-drag paint one persistent Face Set by default; use E/P to switch between erase and paint without holding Ctrl.
 - [x] Use connected mesh components for the separate **Disconnected Parts** analysis.
 - [x] Let geometry mode select a retained mother region; place male pins on the mother and female sockets on extracted parts.
 - [x] Preselect the largest region as the mother, while allowing manual override.
@@ -62,7 +65,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - Let users choose the target region, merge one Face Set into another by relabeling faces, and activate Blender's native Draw Face Sets brush for manual cleanup in geometry mode.
 - Let users merge regions by selecting them directly on the mesh: drag source onto destination to confirm, or click both and press Enter.
 - Clear generated Face Sets after each split so repeated splits reanalyze only the selected resulting mesh.
-- Use left-drag to paint and right-drag to erase before applying the split; display brush and eraser cursors plus a circular radius preview. Allow scrolling to resize the brush while painting.
+- Use left-drag to paint or erase the target Face Set. Use E/P to switch modes, F-drag or the brush size control to resize, and leave right/middle mouse plus wheel available for viewport navigation.
 - Discard small disconnected painted islands and try to merge nearby large regions along mesh topology.
 - Smooth only Face Set labels; do not deform mesh vertices.
 - Convert the selected Face Set to a point-domain mask and use Blender's Mask Slice to create both complementary parts with filled boundaries.
@@ -169,7 +172,7 @@ Each interaction extracts one part. The original keeps its name and remains pres
 - The modal reports hovered/source/target Face Set IDs and face counts. Right-click clears its selection; middle mouse, NDOF, and wheel events pass through to viewport navigation.
 - In geometry mode, a selected mother region stays on the remainder and receives the male connector. Each selected peripheral region becomes a female part. If connector creation is enabled, another part cannot be extracted until the current connector is confirmed.
 - Face Sets are temporary: every successful split clears both results, and the next geometry-based split analyzes its selected input again.
-- Every brush stroke uses the same Face Set ID and color without pressing Ctrl.
+- Every paint stroke uses the same Face Set ID and color without pressing Ctrl; erasing returns painted faces to the background set.
 - Face Set boundary smoothing changes labels only and leaves mesh vertex positions unchanged.
 - In manual paint mode, small painted islands can be ignored and nearby target regions can be joined along a valid surface path. Geometry-analysis regions can be merged and refined by the user.
 - The selected region becomes a filled mask and is extracted as a new object.

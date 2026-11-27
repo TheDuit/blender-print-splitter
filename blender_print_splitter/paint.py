@@ -5,11 +5,9 @@ import math
 
 import bpy
 from .registration import register_classes, unregister_classes
-import gpu
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 from bpy_extras import view3d_utils
-from gpu_extras.batch import batch_for_shader
 
 from .core import (
     BACKGROUND_FACE_SET,
@@ -47,24 +45,33 @@ def _face_graph(mesh, matrix_world):
 
 
 class PSS_OT_paint_faceset(bpy.types.Operator):
-    """Paint or erase one Face Set ID without relying on Ctrl-modified strokes."""
+    """Paint one persistent Face Set with Blender's standard left-drag interaction."""
 
     bl_idname = "print_splitter.paint_faceset"
     bl_label = "Paint Region"
-    bl_description = "Left-drag to paint one Face Set ID; right-drag to erase it"
+    bl_description = "Left-drag to paint; press E to erase or P to paint; F-drag changes brush size"
     bl_options = {"REGISTER", "UNDO", "BLOCKING"}
 
     radius_px: bpy.props.IntProperty(
-        name="Brush Radius",
+        name="Brush Size",
         description="Brush radius in viewport pixels",
-        default=36,
-        min=4,
-        max=300,
+        default=70,
+        min=1,
+        max=10000,
     )
 
-    MIN_RADIUS_PX = 4
-    MAX_RADIUS_PX = 300
-    RADIUS_STEP_PX = 4
+    action: bpy.props.EnumProperty(
+        name="Action",
+        items=(
+            ("PAINT", "Paint", "Paint the current Face Set"),
+            ("ERASE", "Erase", "Return painted faces to the background Face Set"),
+        ),
+        default="PAINT",
+        options={"SKIP_SAVE"},
+    )
+
+    MIN_RADIUS_PX = 1
+    MAX_RADIUS_PX = 10000
 
     @classmethod
     def poll(cls, context):
@@ -82,19 +89,31 @@ class PSS_OT_paint_faceset(bpy.types.Operator):
         if getattr(self.obj, "use_dynamic_topology_sculpting", False):
             self.report({"ERROR"}, "Disable Dyntopo to paint Face Sets with Print Splitter.")
             return {"CANCELLED"}
+        if context.area is None or context.area.type != "VIEW_3D" or context.space_data is None:
+            self.report({"ERROR"}, "Start Face Set painting from the 3D Viewport.")
+            return {"CANCELLED"}
         self.area = context.area
         self.region = next((region for region in context.area.regions if region.type == "WINDOW"), None)
-        self.region_3d = context.space_data.region_3d
+        self.region_3d = getattr(context.space_data, "region_3d", None)
         if self.region is None or self.region_3d is None:
             self.report({"ERROR"}, "This tool requires a 3D Viewport region.")
             return {"CANCELLED"}
         self.attribute = ensure_face_sets(self.mesh)
         self.target_id = int(self.obj.get(FACE_SET_KEY, TARGET_FACE_SET))
         self.obj[FACE_SET_KEY] = self.target_id
-        self.radius_px = context.scene.print_splitter_settings.brush_radius_px
         if not len(self.mesh.polygons):
             self.report({"ERROR"}, "The mesh has no faces to paint.")
             return {"CANCELLED"}
+        self.sculpt_settings = context.tool_settings.sculpt
+        self.brush = self.sculpt_settings.brush
+        self.show_brush_before = self.sculpt_settings.show_brush
+        self.sculpt_settings.show_brush = True
+        settings = context.scene.print_splitter_settings
+        native_radius = int(self.brush.size) if self.brush is not None else settings.brush_radius_px
+        self.radius_px = max(self.MIN_RADIUS_PX, min(self.MAX_RADIUS_PX, native_radius))
+        settings.brush_radius_px = self.radius_px
+        self.use_pressure_size = bool(self.brush and self.brush.use_pressure_size)
+        self.pressure = 1.0
         self.modifier_visibility = [(modifier, modifier.show_viewport) for modifier in self.obj.modifiers]
         for modifier, _visible in self.modifier_visibility:
             modifier.show_viewport = False
@@ -108,10 +127,12 @@ class PSS_OT_paint_faceset(bpy.types.Operator):
             )
         except (RuntimeError, TypeError, ValueError):
             self._restore_modifiers()
+            self.sculpt_settings.show_brush = self.show_brush_before
             self.report({"ERROR"}, "Could not prepare the surface for painting.")
             return {"CANCELLED"}
         if self.bvh is None:
             self._restore_modifiers()
+            self.sculpt_settings.show_brush = self.show_brush_before
             self.report({"ERROR"}, "Could not prepare the surface for painting.")
             return {"CANCELLED"}
         self.centers, self.face_radii, self.adjacency = _face_graph(self.mesh, self.obj.matrix_world)
@@ -119,84 +140,39 @@ class PSS_OT_paint_faceset(bpy.types.Operator):
         self.inverse_3x3 = self.inverse.to_3x3()
         self.original_values = {}
         self.painting = False
-        self.paint_action = "PAINT"
+        self.paint_action = self.action
+        self.radius_adjusting = False
         self.last_mouse = None
-        self.cursor_location = self._event_coord(event)
-        self.cursor_visible = True
-        try:
-            self.cursor_shader = gpu.shader.from_builtin("UNIFORM_COLOR")
-            self.draw_handle = bpy.types.SpaceView3D.draw_handler_add(
-                self._draw_brush_cursor,
-                (),
-                "WINDOW",
-                "POST_PIXEL",
-            )
-        except (RuntimeError, TypeError, ValueError):
-            self._restore_modifiers()
-            self.report({"ERROR"}, "Could not create the brush radius preview.")
-            return {"CANCELLED"}
         try:
             context.space_data.overlay.show_sculpt_face_sets = True
         except AttributeError:
             pass
         context.window_manager.modal_handler_add(self)
         self.window = context.window
-        self.window.cursor_modal_set("PAINT_BRUSH")
+        self.window.cursor_modal_set("ERASER" if self.paint_action == "ERASE" else "PAINT_BRUSH")
         self.cursor_is_modal = True
         self.area.tag_redraw()
-        context.workspace.status_text_set(
-            f"Print Splitter: left-drag paint | right-drag erase | wheel radius ({self.radius_px}px; Shift faster) | Enter finish | Esc cancel"
-        )
+        self._set_status(context)
         return {"RUNNING_MODAL"}
 
-    def _draw_brush_cursor(self):
-        if not self.cursor_visible or self.cursor_location is None:
-            return
-        if bpy.context.area != self.area:
-            return
+    def _set_status(self, context):
+        mode = "ERASE" if self.paint_action == "ERASE" else "PAINT"
+        context.workspace.status_text_set(
+            f"Print Splitter {mode} | left-drag apply | E erase / P paint | F-drag size ({self.radius_px}px) | right/middle mouse + wheel navigate | Enter finish | Esc cancel"
+        )
 
-        x, y = self.cursor_location
-        radius = self.radius_px
-        segments = 64
-        points = [
-            (
-                x + math.cos((2.0 * math.pi * index) / segments) * radius,
-                y + math.sin((2.0 * math.pi * index) / segments) * radius,
-            )
-            for index in range(segments)
-        ]
-        points.append(points[0])
-        batch = batch_for_shader(self.cursor_shader, "LINE_STRIP", {"pos": points})
-
-        gpu.state.blend_set("ALPHA")
-        try:
-            self.cursor_shader.bind()
-            self.cursor_shader.uniform_float("color", (0.0, 0.0, 0.0, 0.8))
-            gpu.state.line_width_set(3.0)
-            batch.draw(self.cursor_shader)
-            self.cursor_shader.uniform_float("color", (1.0, 1.0, 1.0, 0.95))
-            gpu.state.line_width_set(1.25)
-            batch.draw(self.cursor_shader)
-        finally:
-            gpu.state.line_width_set(1.0)
-            gpu.state.blend_set("NONE")
-
-    def _set_cursor_from_event(self, event):
-        x, y = self._event_coord(event)
-        self.cursor_location = (x, y)
-        self.cursor_visible = 0 <= x < self.region.width and 0 <= y < self.region.height
+    def _set_action(self, context, action):
+        self.paint_action = action
+        self.window.cursor_modal_set("ERASER" if action == "ERASE" else "PAINT_BRUSH")
+        self._set_status(context)
         self.area.tag_redraw()
 
-    def _adjust_radius(self, context, direction, event):
-        step = 16 if event.shift else self.RADIUS_STEP_PX
-        self.radius_px = max(
-            self.MIN_RADIUS_PX,
-            min(self.MAX_RADIUS_PX, self.radius_px + direction * step),
-        )
+    def _adjust_radius(self, context, radius):
+        self.radius_px = max(self.MIN_RADIUS_PX, min(self.MAX_RADIUS_PX, int(radius)))
         context.scene.print_splitter_settings.brush_radius_px = self.radius_px
-        context.workspace.status_text_set(
-            f"Print Splitter: radius {self.radius_px}px | wheel change radius (Shift faster) | left-drag paint | right-drag erase | Enter finish | Esc cancel"
-        )
+        if self.brush is not None:
+            self.brush.size = self.radius_px
+        self._set_status(context)
         self.area.tag_redraw()
 
     def _ray_hit(self, x, y):
@@ -212,10 +188,11 @@ class PSS_OT_paint_faceset(bpy.types.Operator):
         return hit[2], location_world
 
     def _radius_world(self, x, y, hit_location):
+        radius_px = max(1, int(self.radius_px * self.pressure))
         edge_location = view3d_utils.region_2d_to_location_3d(
             self.region,
             self.region_3d,
-            (x + self.radius_px, y),
+            (x + radius_px, y),
             hit_location,
         )
         return max((edge_location - hit_location).length, 1e-6)
@@ -266,7 +243,7 @@ class PSS_OT_paint_faceset(bpy.types.Operator):
     def _sample_segment(self, start, end):
         dx, dy = end[0] - start[0], end[1] - start[1]
         length = math.hypot(dx, dy)
-        spacing = max(2.0, self.radius_px * 0.28)
+        spacing = max(2.0, self.radius_px * self.pressure * 0.28)
         steps = max(1, int(length / spacing))
         for index in range(1, steps + 1):
             factor = index / steps
@@ -282,21 +259,19 @@ class PSS_OT_paint_faceset(bpy.types.Operator):
             self.mesh.update()
             self.obj.update_tag(refresh={"DATA"})
         self._restore_modifiers()
-        draw_handle = getattr(self, "draw_handle", None)
-        if draw_handle is not None:
-            bpy.types.SpaceView3D.draw_handler_remove(draw_handle, "WINDOW")
-            self.draw_handle = None
         if getattr(self, "cursor_is_modal", False):
             self.window.cursor_modal_restore()
             self.cursor_is_modal = False
+        try:
+            self.sculpt_settings.show_brush = self.show_brush_before
+        except (AttributeError, ReferenceError):
+            pass
         context.workspace.status_text_set(None)
         return {"CANCELLED" if cancelled else "FINISHED"}
 
-    def _start_stroke(self, context, event, action):
+    def _start_stroke(self, context, event):
         self.painting = True
-        self.paint_action = action
-        self.window.cursor_modal_set("PAINT_BRUSH" if action == "PAINT" else "ERASER")
-        self._set_cursor_from_event(event)
+        self.pressure = event.pressure if self.use_pressure_size and event.pressure > 0.0 else 1.0
         self.last_mouse = self._event_coord(event)
         self._paint_at(*self.last_mouse)
 
@@ -308,38 +283,59 @@ class PSS_OT_paint_faceset(bpy.types.Operator):
                 pass
 
     def modal(self, context, event):
-        if event.type in {"MIDDLEMOUSE", "NDOF_MOTION"}:
+        if context.mode != "SCULPT" or context.active_object != self.obj:
+            return self._finish(context)
+        if event.type in {"MIDDLEMOUSE", "RIGHTMOUSE", "NDOF_MOTION", "WHEELUPMOUSE", "WHEELDOWNMOUSE"}:
             return {"PASS_THROUGH"}
-        if event.type in {"WHEELUPMOUSE", "WHEELDOWNMOUSE"}:
-            x, y = self._event_coord(event)
-            if not (0 <= x < self.region.width and 0 <= y < self.region.height):
-                return {"PASS_THROUGH"}
-            self._adjust_radius(context, 1 if event.type == "WHEELUPMOUSE" else -1, event)
+        if event.type == "E" and event.value == "PRESS":
+            self._set_action(context, "ERASE")
+            return {"RUNNING_MODAL"}
+        if event.type == "P" and event.value == "PRESS":
+            self._set_action(context, "PAINT")
+            return {"RUNNING_MODAL"}
+        if event.type == "F" and event.value == "PRESS" and not self.radius_adjusting:
+            self.radius_adjusting = True
+            self.radius_drag_start_x = event.mouse_x
+            self.radius_drag_start_value = self.radius_px
+            return {"RUNNING_MODAL"}
+        if event.type == "F" and event.value == "RELEASE" and self.radius_adjusting:
+            self.radius_adjusting = False
+            return {"RUNNING_MODAL"}
+        if event.type in {"LEFT_BRACKET", "RIGHT_BRACKET"} and event.value == "PRESS":
+            factor = 0.9 if event.type == "LEFT_BRACKET" else 1.1
+            self._adjust_radius(context, self.radius_px * factor)
             return {"RUNNING_MODAL"}
         if event.type == "ESC" and event.value == "PRESS":
             return self._finish(context, cancelled=True)
         if event.type in {"RET", "NUMPAD_ENTER"} and event.value == "PRESS":
             return self._finish(context)
-        if event.type in {"LEFTMOUSE", "RIGHTMOUSE"}:
-            if event.value == "PRESS":
-                action = "PAINT" if event.type == "LEFTMOUSE" else "ERASE"
-                self._start_stroke(context, event, action)
-                return {"RUNNING_MODAL"}
+        if event.type == "LEFTMOUSE":
             if event.value == "RELEASE" and self.painting:
                 self.painting = False
-                self.paint_action = "PAINT"
-                self.window.cursor_modal_set("PAINT_BRUSH")
                 self.last_mouse = None
                 return {"RUNNING_MODAL"}
+            x, y = self._event_coord(event)
+            if not (0 <= x < self.region.width and 0 <= y < self.region.height):
+                return {"PASS_THROUGH"}
+            if event.value == "PRESS":
+                self._start_stroke(context, event)
+                return {"RUNNING_MODAL"}
         if event.type == "MOUSEMOVE":
-            self._set_cursor_from_event(event)
             current = self._event_coord(event)
+            if self.radius_adjusting:
+                self._adjust_radius(
+                    context,
+                    self.radius_drag_start_value + event.mouse_x - self.radius_drag_start_x,
+                )
+                return {"RUNNING_MODAL"}
+            self.pressure = event.pressure if self.use_pressure_size and event.pressure > 0.0 else 1.0
             if self.painting:
                 if self.last_mouse is not None:
                     self._sample_segment(self.last_mouse, current)
                 self.last_mouse = current
-            return {"RUNNING_MODAL"}
-        return {"RUNNING_MODAL"}
+                return {"RUNNING_MODAL"}
+            return {"PASS_THROUGH"}
+        return {"PASS_THROUGH"}
 
     def cancel(self, context):
         self._finish(context, cancelled=True)
